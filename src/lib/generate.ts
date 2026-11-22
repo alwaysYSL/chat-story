@@ -1,12 +1,12 @@
 import { useSyncExternalStore } from 'react';
 import { db, type Attachment, type Chat, type ChatKind, type LengthPreset, type Message, type Version } from '../db';
-import { buildContext, mergeSameRole, messageContent } from './context';
+import { buildContext, getBrief, mergeSameRole, messageContent } from './context';
 import { ApiError, streamChat, type ApiMessage } from './api';
 import { flushEditors } from './editors';
 import { cleanOutput, parseMarkdown, removeSegment, replaceSegment, segmentText, serializeBlocks } from './markdown';
 import { createChapter, createStory, getStoryPages, savePageDoc, trashChapter } from './pages';
 import { costUsd, isPeak } from './pricing';
-import { continueInstr, DISCUSS_INSTR, maxTokensFor, openingInstr } from './prompts';
+import { chapterStartNote, continueInstr, DISCUSS_INSTR, effectiveReminder, maxTokensFor, openingInstr, reminderBlock } from './prompts';
 import { findModel, PROVIDER_INFO, type ModelRef } from './providers';
 import { getSettings, markChanged, temperatureFor, type Settings } from './settings';
 import { countWords, firstWords, uid } from './util';
@@ -201,7 +201,9 @@ export async function sendMessage(o: SendOptions): Promise<SendResult> {
     const pages = await getStoryPages(chat.pageId!);
     const root = pages[0];
     const total = pages.reduce((n, p) => n + p.words, 0);
-    const isOpening = total === 0;
+    // Pembukaan = belum pernah ada pesan tulis di chat ini (termasuk page yang sudah berisi teks manual).
+    const prior = await db.messages.where('chatId').equals(chat.id).toArray();
+    const isOpening = !prior.some((m) => m.role === 'user' && m.mode === 'write' && m.status !== 'canceled');
     let newChapterTitle: string | null = null;
     if (o.target === 'new' && !isOpening) {
       const ch = await createChapter(root.id);
@@ -212,9 +214,14 @@ export async function sendMessage(o: SendOptions): Promise<SendResult> {
       writePageId = pages[pages.length - 1].id;
     }
     if (isOpening) {
+      // Judul chat otomatis mengikuti brief (bukan pertanyaan diskusi sebelumnya).
+      if (chat.titleAuto && prior.length && o.text.trim()) {
+        chat = { ...chat, title: firstWords(o.text, 6) };
+        await db.chats.update(chat.id, { title: chat.title });
+      }
       length = 'opening';
       expectTitle = root.titleAuto;
-      instr = openingInstr(s, expectTitle);
+      instr = openingInstr(s, expectTitle, total > 0);
     } else {
       length = o.length === 'opening' ? 'normal' : o.length;
       instr = continueInstr(s, length, { hasDirection: !!o.text.trim(), newChapterTitle });
@@ -334,10 +341,13 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
     const vision = resolved.model.vision;
     const ctx = await buildContext(chat, vision, user.seq);
     const omitted = { n: ctx.imagesOmitted };
-    const messages: ApiMessage[] = mergeSameRole([
-      ...ctx.messages,
-      { role: 'user', content: await messageContent(user, vision, omitted) },
-    ]);
+    const extras = write && kind !== 'append' ? await requestExtras(chat, user, asst) : [];
+    let current = await messageContent(user, vision, omitted);
+    if (extras.length) {
+      const add = extras.join('\n\n');
+      current = typeof current === 'string' ? `${current}\n\n${add}` : [...current, { type: 'text', text: add }];
+    }
+    const messages: ApiMessage[] = mergeSameRole([...ctx.messages, { role: 'user', content: current }]);
     if (kind === 'append' && prefixText) {
       if (usePrefix) messages.push({ role: 'assistant', content: prefixText, prefix: true });
       else {
@@ -390,6 +400,25 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
     releaseWakeLock();
     setActive(null);
   }
+}
+
+/**
+ * Tambahan sementara untuk permintaan menulis yang sedang dikirim (tidak disimpan ke riwayat,
+ * jadi tidak menggeser awalan percakapan yang sudah ter-cache):
+ * - pengingat aturan penulis (author's note), kecuali untuk pembukaan;
+ * - catatan "awal bab" kalau AI menulis di bab yang masih kosong.
+ */
+async function requestExtras(chat: Chat, user: Message, asst: Message): Promise<string[]> {
+  const out: string[] = [];
+  const page = asst.targetPageId ? await db.pages.get(asst.targetPageId) : undefined;
+  if (page?.parentId && !page.text.trim() && !/bab baru/i.test(user.instr)) out.push(chapterStartNote(page.title || 'Tanpa judul'));
+  if (user.length !== 'opening') {
+    const fresh = (await db.chats.get(chat.id)) ?? chat;
+    const brief = await getBrief(chat.id);
+    const r = effectiveReminder(fresh.reminder, brief?.text);
+    if (r.text) out.push(reminderBlock(r.text));
+  }
+  return out;
 }
 
 interface FinishArgs {
@@ -543,14 +572,33 @@ async function captureEdits(asst: Message): Promise<Version[]> {
   return versions;
 }
 
-export async function retryMessage(asstId: string, newText?: string): Promise<void> {
+export interface RetryOptions {
+  /** model yang sedang dipilih di chat; kosong = model pesan aslinya */
+  model?: ModelRef | null;
+  thinking?: boolean;
+}
+
+/** Pakai model yang sedang dipilih untuk menulis ulang / melanjutkan. */
+async function applyModel(s: Settings, user: Message, asst: Message, o: RetryOptions): Promise<[Message, Message]> {
+  if (!o.model) return [user, asst];
+  const r = findModel(s.providers, o.model);
+  if (!r || !r.provider.apiKey.trim()) {
+    throw new UserError('nokey', 'Pilih model dan isi API key penyedianya dulu di Pengaturan → Penyedia AI.');
+  }
+  const patch = { provider: o.model.provider, model: o.model.model, thinking: o.thinking ?? user.thinking };
+  await db.messages.update(user.id, patch);
+  await db.messages.update(asst.id, patch);
+  return [{ ...user, ...patch }, { ...asst, ...patch }];
+}
+
+export async function retryMessage(asstId: string, newText?: string, opts: RetryOptions = {}): Promise<void> {
   const s = await getSettings();
   if (active) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
   await flushEditors();
   const p = await pairOf(asstId);
   if (!p) return;
-  let { user } = p;
-  const { chat, asst } = p;
+  const chat = p.chat;
+  let [user, asst] = await applyModel(s, p.user, p.asst, opts);
   if (newText !== undefined) {
     const s2 = await getSettings();
     let instr = user.instr;
@@ -578,12 +626,14 @@ export async function retryMessage(asstId: string, newText?: string): Promise<vo
 }
 
 /** Lanjutkan balasan yang terputus/dihentikan dari kalimat terakhir (Chat Prefix Completion). */
-export async function continueMessage(asstId: string): Promise<void> {
+export async function continueMessage(asstId: string, opts: RetryOptions = {}): Promise<void> {
   const s = await getSettings();
   if (active) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
   await flushEditors();
-  const p = await pairOf(asstId);
-  if (!p || p.user.mode !== 'write' || !p.asst.targetPageId) return;
+  const found = await pairOf(asstId);
+  if (!found || found.user.mode !== 'write' || !found.asst.targetPageId) return;
+  const [u2, a2] = await applyModel(s, found.user, found.asst, opts);
+  const p = { ...found, user: u2, asst: a2 };
   const versions = await captureEdits(p.asst);
   const v = versions[p.asst.active];
   if (!v) return;

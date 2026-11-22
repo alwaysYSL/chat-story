@@ -56,8 +56,10 @@ export function maxTokensFor(s: Settings, preset: LengthPreset, thinking: boolea
   return thinking ? base + 16000 : base;
 }
 
-export function openingInstr(s: Settings, wantTitle: boolean): string {
-  let t = `[Instruksi aplikasi: MENULIS] Tulis PEMBUKAAN cerita berdasarkan brief di atas. Gambaran pembukaan dari penulis hanya konteks: sempurnakan dan kembangkan, jangan disalin. Target panjang: ${targetRange(s, 'opening')}.`;
+export function openingInstr(s: Settings, wantTitle: boolean, hasDraft = false): string {
+  let t = hasDraft
+    ? `[Instruksi aplikasi: MENULIS] Naskah sudah berisi teks awal yang ditulis penulis sendiri (di atas). Tulis PEMBUKAAN cerita berdasarkan brief: lanjutkan tepat dari akhir teks awal itu dan kembangkan menjadi pembukaan utuh. Jangan mengulang teks awal. Target panjang tulisan baru: ${targetRange(s, 'opening')}.`
+    : `[Instruksi aplikasi: MENULIS] Tulis PEMBUKAAN cerita berdasarkan brief di atas. Gambaran pembukaan dari penulis hanya konteks: sempurnakan dan kembangkan, jangan disalin. Target panjang: ${targetRange(s, 'opening')}.`;
   if (wantTitle) t += ' Baris pertama wajib berformat "Judul: <judul cerita>", lalu satu baris kosong, lalu cerita.';
   return t;
 }
@@ -82,3 +84,46 @@ export const LENGTH_LABEL: Record<LengthPreset, string> = {
   long: 'Panjang',
   opening: 'Pembukaan',
 };
+
+/* ---------- Pengingat aturan (author's note) ---------- */
+
+const RULE_HEAD = /aturan\s+(penulisan\s+)?(lanjutan|cerita\s+lanjutan)|aturan\s+(untuk\s+)?lanjutan/i;
+const OTHER_HEAD =
+  /^\s*(\d+[.)]\s*)?(\*\*|#+\s*)?(gambaran|karakter|tokoh|latar|setting|alur|sinopsis|aturan\s+(penulisan\s+)?pembukaan|pembukaan|catatan)\b/i;
+const MAX_REMINDER = 1200;
+
+/**
+ * Ambil bagian "aturan lanjutan" dari brief: mulai dari baris yang menyebutnya sampai bagian lain dimulai.
+ * Kembali '' kalau tidak ditemukan.
+ */
+export function extractRules(brief: string): string {
+  const lines = brief.replace(/\r/g, '').split('\n');
+  const start = lines.findIndex((l) => RULE_HEAD.test(l));
+  if (start < 0) return '';
+  const out: string[] = [];
+  for (let i = start; i < lines.length; i++) {
+    const l = lines[i];
+    if (i > start && OTHER_HEAD.test(l) && !RULE_HEAD.test(l)) break;
+    out.push(l);
+  }
+  const text = out.join('\n').trim();
+  return text.length > MAX_REMINDER ? text.slice(0, MAX_REMINDER).trimEnd() + '…' : text;
+}
+
+/** Pengingat yang berlaku: isian manual kalau ada, kalau belum pernah diisi ambil dari brief. */
+export function effectiveReminder(saved: string | undefined, briefText: string | undefined): { text: string; auto: boolean } {
+  if (saved !== undefined) return { text: saved.trim(), auto: false };
+  return { text: briefText ? extractRules(briefText) : '', auto: true };
+}
+
+export function reminderBlock(text: string): string {
+  return `[Pengingat aturan penulisan dari penulis, tetap patuhi]\n${text}`;
+}
+
+export function chapterStartNote(title: string): string {
+  return `[Catatan aplikasi: tulisan ini adalah awal bab "${title}".]`;
+}
+
+export function chapterMarker(title: string): string {
+  return `[Bab berikutnya dimulai: "${title}"]`;
+}

@@ -40,12 +40,13 @@ import {
   type PendingAttachment,
 } from '../lib/generate';
 import { compressImage, IMAGE_TYPES, MAX_TEXT_BYTES, TEXT_EXT } from '../lib/images';
+import { findBrief } from '../lib/context';
 import { cleanOutput, segmentText } from '../lib/markdown';
 import { setJump, type NavState } from '../lib/nav';
 import { displayTitle } from '../lib/pages';
 import { isPeak } from '../lib/pricing';
-import { findModel, usableModels, type ModelRef } from '../lib/providers';
-import { LENGTH_LABEL, targetRange } from '../lib/prompts';
+import { estimateTokens, findModel, usableModels, type ModelRef } from '../lib/providers';
+import { effectiveReminder, LENGTH_LABEL, targetRange } from '../lib/prompts';
 import { useSettings, type Settings } from '../lib/settings';
 import { copyText, debounce, formatNumber, formatRupiah } from '../lib/util';
 
@@ -106,6 +107,7 @@ export default function ChatScreen() {
   const [menu, setMenu] = useState<Menu>(null);
   const [editMsg, setEditMsg] = useState<Message | null>(null);
   const [editBrief, setEditBrief] = useState<Message | null>(null);
+  const [editReminder, setEditReminder] = useState(false);
   const [selectText, setSelectText] = useState<string | null>(null);
   const [briefOpen, setBriefOpen] = useState(false);
   const [showCanceled, setShowCanceled] = useState(false);
@@ -166,7 +168,21 @@ export default function ChatScreen() {
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [messages?.length, gen?.live, gen?.words]);
 
-  const rows = useMemo(() => buildRows(messages ?? [], kind === 'main'), [messages, kind]);
+  const briefMsg = useMemo(() => (kind === 'main' ? findBrief(messages ?? []) : undefined), [messages, kind]);
+  const rows = useMemo(() => buildRows(messages ?? [], briefMsg?.id), [messages, briefMsg]);
+  // Perkiraan ukuran konteks yang dikirim ke AI (naskah + chat + gambar).
+  const contextTokens = useMemo(() => {
+    let chars = (storyPages ?? []).reduce((n, p) => n + p.text.length, 0);
+    let images = 0;
+    for (const m of messages ?? []) {
+      if (m.status === 'canceled' || m.excluded) continue;
+      if (m.role === 'user') {
+        chars += m.text.length + m.attachText.length + m.instr.length;
+        images += m.attachmentIds.filter((a) => attachmentMap?.get(a)?.kind === 'image').length;
+      } else if (m.mode !== 'write') chars += m.text.length;
+    }
+    return estimateTokens(chars, images);
+  }, [storyPages, messages, attachmentMap]);
 
   if (!settings || (!isNew && chat === undefined)) return <div className="screen" />;
   if (!isNew && chat === null) {
@@ -185,13 +201,17 @@ export default function ChatScreen() {
   const list = messages ?? [];
   const root = storyPages?.[0];
   const lastPage = storyPages?.[storyPages.length - 1];
-  const totalWords = (storyPages ?? []).reduce((n, p) => n + p.words, 0);
   const canWrite = kind !== 'discuss';
   const writeOn = canWrite && write;
-  const isOpening = !root || totalWords === 0;
+  // Pembukaan = belum ada pesan tulis di chat ini (page boleh sudah berisi teks manual).
+  const isOpening = !list.some((m) => m.role === 'user' && m.mode === 'write' && m.status !== 'canceled');
   const busy = !!gen;
   const genHere = !!gen && gen.chatId === id;
-  const brief = kind === 'main' ? list.find((m) => m.role === 'user') : undefined;
+  const brief = briefMsg;
+  const reminder = effectiveReminder(chat?.reminder, brief?.text);
+  const ctxLimit = resolved?.model.context ?? 0;
+  const ctxNear = ctxLimit > 0 && contextTokens > ctxLimit * 0.85;
+  const modelOpts = { model: effModel, thinking: effThinking };
   const lastAsst = [...list].reverse().find((m) => m.role === 'assistant' && m.status !== 'canceled');
   const lastUser = lastAsst ? list[list.findIndex((m) => m.id === lastAsst.id) - 1] : undefined;
   const hasImages =
@@ -288,7 +308,7 @@ export default function ChatScreen() {
   const copy = async (t: string) => toast((await copyText(t)) ? 'Disalin' : 'Gagal menyalin');
   const retry = async (asst: Message) => {
     try {
-      await retryMessage(asst.id);
+      await retryMessage(asst.id, undefined, modelOpts);
       if (asst.mode === 'write' && asst.targetPageId) goToPage(asst.targetPageId);
     } catch (e) {
       handleError(e);
@@ -296,11 +316,17 @@ export default function ChatScreen() {
   };
   const resume = async (asst: Message) => {
     try {
-      await continueMessage(asst.id);
+      await continueMessage(asst.id, modelOpts);
       if (asst.targetPageId) goToPage(asst.targetPageId);
     } catch (e) {
       handleError(e);
     }
+  };
+  const toggleExclude = async (asst: Message, user: Message | undefined) => {
+    const excluded = !asst.excluded;
+    await db.messages.update(asst.id, { excluded });
+    if (user) await db.messages.update(user.id, { excluded });
+    toast(excluded ? 'Tidak dibaca AI lagi' : 'Dibaca AI lagi');
   };
   const cancel = async (asst: Message) => {
     try {
@@ -321,6 +347,13 @@ export default function ChatScreen() {
           Atur sekarang
         </button>
       </div>
+    );
+  } else if (resolved && ctxNear && !dismissed.ctx) {
+    note = (
+      <Note onClose={() => setDismissed((d) => ({ ...d, ctx: true }))} warn>
+        Cerita ini ±{formatNumber(Math.round(contextTokens / 1000))} ribu token, mendekati batas {resolved.model.label} (
+        {formatNumber(Math.round(ctxLimit / 1000))} ribu). Pilih model berkonteks lebih besar.
+      </Note>
     );
   } else if (resolved && !resolved.model.vision && hasImages && !dismissed.vision) {
     note = (
@@ -401,9 +434,11 @@ export default function ChatScreen() {
         {brief && (
           <BriefPin
             m={brief}
+            reminder={reminder}
             open={briefOpen}
             onToggle={() => setBriefOpen((v) => !v)}
             onMenu={() => setMenu({ m: brief, pair: list[list.indexOf(brief) + 1] })}
+            onEditReminder={() => setEditReminder(true)}
           />
         )}
 
@@ -655,6 +690,7 @@ export default function ChatScreen() {
         thinking={effThinking}
         onThinking={setThinking}
         peak={peak}
+        contextTokens={kind === 'free' && !list.length ? 0 : contextTokens}
       />
 
       <MessageMenu
@@ -672,6 +708,8 @@ export default function ChatScreen() {
         onRetry={(a) => void retry(a)}
         onResume={(a) => void resume(a)}
         onCancel={(a) => void cancel(a)}
+        onExclude={(a, u) => void toggleExclude(a, u)}
+        onEditReminder={() => setEditReminder(true)}
         onOpen={(a) => a.targetPageId && goToPage(a.targetPageId, a.versions.length ? a.id : undefined)}
       />
 
@@ -703,11 +741,23 @@ export default function ChatScreen() {
           const reply = list[list.findIndex((x) => x.id === editMsg.id) + 1];
           if (!reply) return;
           try {
-            await retryMessage(reply.id, v);
+            await retryMessage(reply.id, v, modelOpts);
             if (reply.mode === 'write' && reply.targetPageId) goToPage(reply.targetPageId);
           } catch (e) {
             handleError(e);
           }
+        }}
+      />
+
+      <ReminderSheet
+        open={editReminder}
+        onClose={() => setEditReminder(false)}
+        current={reminder}
+        briefText={brief?.text ?? ''}
+        onSave={async (v) => {
+          if (!chat) return;
+          await db.chats.update(chat.id, { reminder: v });
+          toast(v === undefined ? 'Pengingat diambil dari brief' : v.trim() ? 'Pengingat disimpan' : 'Pengingat dimatikan');
         }}
       />
 
@@ -730,9 +780,8 @@ export default function ChatScreen() {
 
 /* ---------- Susun baris: pasangan yang dibatalkan dilipat jadi satu baris ---------- */
 
-function buildRows(list: Message[], hasBrief: boolean): Row[] {
+function buildRows(list: Message[], briefId: string | undefined): Row[] {
   const rows: Row[] = [];
-  const briefId = hasBrief ? list.find((m) => m.role === 'user')?.id : undefined;
   for (let i = 0; i < list.length; i++) {
     const m = list[i];
     if (m.status === 'canceled' && m.id !== briefId) {
@@ -772,7 +821,21 @@ function Note({ children, onClose, warn }: { children: ReactNode; onClose: () =>
 
 /* ---------- Brief tersemat ---------- */
 
-function BriefPin({ m, open, onToggle, onMenu }: { m: Message; open: boolean; onToggle: () => void; onMenu: () => void }) {
+function BriefPin({
+  m,
+  reminder,
+  open,
+  onToggle,
+  onMenu,
+  onEditReminder,
+}: {
+  m: Message;
+  reminder: { text: string; auto: boolean };
+  open: boolean;
+  onToggle: () => void;
+  onMenu: () => void;
+  onEditReminder: () => void;
+}) {
   const lp = useLongPress(onMenu);
   return (
     <div className={'brief-pin' + (open ? ' open' : '')}>
@@ -782,8 +845,21 @@ function BriefPin({ m, open, onToggle, onMenu }: { m: Message; open: boolean; on
         <IconChevronDown size={16} className={open ? 'rot180' : ''} />
       </button>
       {open && (
-        <div className="brief-body" {...lp}>
-          {m.text}
+        <div className="brief-scroll">
+          <div className="brief-body" {...lp}>
+            {m.text}
+          </div>
+          <div className="reminder-box">
+            <div className="reminder-head">
+              <span>Pengingat aturan{reminder.auto && reminder.text ? ' · otomatis dari brief' : ''}</span>
+              <button className="link-btn" onClick={onEditReminder}>
+                {reminder.text ? 'Edit' : 'Tambah'}
+              </button>
+            </div>
+            <div className={'reminder-text' + (reminder.text ? '' : ' muted')}>
+              {reminder.text || 'Belum ada. Pengingat dikirim di akhir setiap permintaan menulis supaya AI tetap patuh pada aturan Anda.'}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -799,7 +875,7 @@ function UserBubble({ m, atts, onMenu }: { m: Message; atts: Attachment[]; onMen
   const urls = useMemo(() => atts.map((a) => (a.kind === 'image' && a.blob ? URL.createObjectURL(a.blob) : null)), [atts]);
   useEffect(() => () => urls.forEach((u) => u && URL.revokeObjectURL(u)), [urls]);
   return (
-    <div className="msg user">
+    <div className={'msg user' + (m.excluded ? ' excluded' : '')}>
       <div className={'bubble pressable' + (long && !expanded ? ' clamp' : '')} {...lp}>
         {m.text ? m.text : <i>{m.mode === 'write' ? 'Lanjutkan saja' : '(lampiran)'}</i>}
       </div>
@@ -971,11 +1047,17 @@ function DiscussBubble({
 }) {
   const lp = useLongPress(onMenu);
   const text = live ?? m.text;
-  const meta = [costLabel(m, rate), shortModel(m.model), m.status === 'stopped' ? 'dihentikan' : '', m.status === 'interrupted' ? 'terputus' : '']
+  const meta = [
+    m.excluded ? 'tidak dibaca AI' : '',
+    costLabel(m, rate),
+    shortModel(m.model),
+    m.status === 'stopped' ? 'dihentikan' : '',
+    m.status === 'interrupted' ? 'terputus' : '',
+  ]
     .filter(Boolean)
     .join(' · ');
   return (
-    <div className="msg ai">
+    <div className={'msg ai' + (m.excluded ? ' excluded' : '')}>
       <div className="bubble ai-bubble pressable" {...lp}>
         {text ? (
           <MarkdownView text={text} />
@@ -1096,6 +1178,8 @@ function MessageMenu({
   onRetry,
   onResume,
   onCancel,
+  onExclude,
+  onEditReminder,
   onOpen,
 }: {
   menu: Menu;
@@ -1112,6 +1196,8 @@ function MessageMenu({
   onRetry: (asst: Message) => void;
   onResume: (asst: Message) => void;
   onCancel: (asst: Message) => void;
+  onExclude: (asst: Message, user: Message | undefined) => void;
+  onEditReminder: () => void;
   onOpen: (asst: Message) => void;
 }) {
   const m = menu?.m;
@@ -1140,6 +1226,15 @@ function MessageMenu({
           />
         )}
         {isBrief && <SheetItem icon={<IconPage />} label="Edit brief saja" hint="Berlaku untuk tulisan berikutnya" onClick={run(() => onEditBrief(m))} />}
+        {isBrief && <SheetItem icon={<IconBulb />} label="Pengingat aturan" hint="Dikirim di setiap permintaan menulis" onClick={run(onEditReminder)} />}
+        {m.mode === 'discuss' && pair && pair.status !== 'canceled' && (
+          <SheetItem
+            icon={<IconClose />}
+            label={m.excluded ? 'Masukkan lagi ke konteks' : 'Keluarkan dari konteks'}
+            hint={m.excluded ? 'AI membaca diskusi ini lagi' : 'AI tidak membaca diskusi ini lagi'}
+            onClick={run(() => onExclude(pair, m))}
+          />
+        )}
         {isLast && pair && <SheetItem icon={<IconRetry />} label="Kirim ulang" hint="Tulis ulang balasannya" disabled={busy} onClick={run(() => onRetry(pair))} />}
         {t && <SheetItem icon={<IconText />} label="Pilih teks" onClick={run(() => onSelect(t))} />}
         {isLast && pair && pair.length !== 'opening' && (
@@ -1160,6 +1255,14 @@ function MessageMenu({
         {isLast && resumable && <SheetItem icon={<IconFwd />} label="Lanjutkan dari sini" disabled={busy} onClick={run(() => onResume(m))} />}
         {isLast && <SheetItem icon={<IconRetry />} label="Coba lagi" hint={m.mode === 'write' ? 'Versi lama tetap tersimpan' : undefined} disabled={busy} onClick={run(() => onRetry(m))} />}
         {t && m.mode !== 'write' && <SheetItem icon={<IconText />} label="Pilih teks" onClick={run(() => onSelect(t))} />}
+        {m.mode !== 'write' && m.status !== 'canceled' && (
+          <SheetItem
+            icon={<IconClose />}
+            label={m.excluded ? 'Masukkan lagi ke konteks' : 'Keluarkan dari konteks'}
+            hint={m.excluded ? 'AI membaca diskusi ini lagi' : 'AI tidak membaca diskusi ini lagi'}
+            onClick={run(() => onExclude(m, pair))}
+          />
+        )}
         {isLast && m.length !== 'opening' && (
           <SheetItem
             icon={<IconTrash />}
@@ -1177,6 +1280,64 @@ function MessageMenu({
   return (
     <Sheet open={!!menu} onClose={onClose} title={title}>
       {items}
+    </Sheet>
+  );
+}
+
+/* ---------- Sheet pengingat aturan ---------- */
+
+function ReminderSheet({
+  open,
+  onClose,
+  current,
+  briefText,
+  onSave,
+}: {
+  open: boolean;
+  onClose: () => void;
+  current: { text: string; auto: boolean };
+  briefText: string;
+  onSave: (v: string | undefined) => void;
+}) {
+  const [value, setValue] = useState(current.text);
+  useEffect(() => {
+    if (open) setValue(current.text);
+  }, [open, current.text]);
+  const fromBrief = effectiveReminder(undefined, briefText).text;
+  return (
+    <Sheet open={open} onClose={onClose} title="Pengingat aturan">
+      <p className="note pad">
+        Ditempel di akhir setiap permintaan menulis lanjutan, supaya AI tetap patuh walaupun cerita sudah panjang. Tulis
+        singkat saja, misalnya gaya bahasa, sudut pandang, dan hal yang harus dihindari.
+      </p>
+      <textarea
+        className="input textarea-md"
+        value={value}
+        placeholder="mis. Sudut pandang orang ketiga. Banyak dialog. Jangan melompat waktu."
+        onChange={(e) => setValue(e.target.value)}
+      />
+      <div className="row-buttons">
+        {fromBrief && (
+          <button
+            className="btn"
+            onClick={() => {
+              onSave(undefined);
+              onClose();
+            }}
+          >
+            Ambil dari brief
+          </button>
+        )}
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            onSave(value.trim());
+            onClose();
+          }}
+        >
+          Simpan
+        </button>
+      </div>
     </Sheet>
   );
 }

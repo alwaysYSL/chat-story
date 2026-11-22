@@ -1785,3 +1785,48 @@ input[type='range'] {
 .row-buttons.pad {
   padding: 4px 12px 0;
 }
+
+/* ---------- Brief: pengingat aturan & konteks ---------- */
+.brief-scroll {
+  max-height: 50dvh;
+  overflow-y: auto;
+}
+.brief-scroll .brief-body {
+  max-height: none;
+  overflow: visible;
+}
+.reminder-box {
+  margin: 0 12px 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-3);
+}
+.reminder-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.reminder-head .link-btn {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.reminder-text {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.textarea-md {
+  min-height: 24dvh;
+  resize: vertical;
+  line-height: 1.5;
+  margin: 0 12px;
+  width: calc(100% - 24px);
+}
+.msg.excluded .bubble {
+  opacity: 0.55;
+}

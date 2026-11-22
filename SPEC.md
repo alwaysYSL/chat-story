@@ -192,6 +192,13 @@ user      : arahan baru + target panjang   ← permintaan sekarang
 
 - **Instruksi dasar bawaan:** menulis dalam bahasa Indonesia, langsung menulis cerita tanpa kalimat pembuka/penutup atau komentar, tidak mengulang teks sebelumnya, tidak menyalin arahan mentah-mentah, mengikuti aturan penulisan di brief, dan berusaha memenuhi target kata.
 - **Isi balasan AI selalu diambil dari naskah versi terbaru**, jadi editan Anda terbaca oleh AI.
+- **Brief** = pesan pertama yang dikirim dalam mode tulis (diskusi sebelumnya tidak dihitung). Brief **selalu** dikirim, walaupun pembukaannya sudah dihapus dari naskah.
+- **Pembukaan** = pesan tulis pertama di chat utama. Kalau page sudah berisi teks manual, instruksinya meminta AI melanjutkan dan mengembangkan teks awal itu menjadi pembukaan.
+- **Pengingat aturan** (*author's note*): teks pendek per cerita yang ditempel di akhir setiap permintaan menulis lanjutan (bukan pembukaan). Bawaannya diambil otomatis dari bagian "aturan lanjutan" di brief; bisa diedit atau dimatikan dari brief yang disematkan. Tidak disimpan ke riwayat, jadi cache tidak terganggu.
+- **Penanda bab:** setiap bab yang punya isi diawali `[Bab berikutnya dimulai: "Judul"]` di konteks. Kalau AI menulis di bab yang masih kosong, permintaan itu diberi catatan "awal bab".
+- **Keluarkan dari konteks:** pasangan diskusi bisa dikeluarkan (dan dimasukkan lagi) lewat menu tahan bubble.
+- **Coba lagi / Lanjutkan dari sini / Edit & tulis ulang** memakai model yang sedang dipilih di chip model.
+- **Ukuran konteks:** perkiraan token cerita tampil di sheet model. Setiap model punya isian batas konteks; kalau cerita melewati 85% batas model, muncul peringatan.
 - **Bab:** konteks disusun mengikuti urutan bab. Judul bab disisipkan sebagai heading di awal balasan pertama bab itu, supaya AI tahu batas bab.
 - **Pesan diskusi** di chat utama ikut konteks di posisi kronologisnya.
 - **Teks manual:** teks yang Anda ketik sendiri digabung ke balasan AI terdekat di page yang sama. Kalau sebuah bab hanya berisi teks manual, teks itu dikirim sebagai pesan user berlabel "teks yang ditulis penulis".
@@ -267,10 +274,11 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 **Versi 1:** semua yang dijelaskan di dokumen ini.
 
 **Versi 2 (nanti):**
+- **Catatan cerita** (*story bible*): daftar fakta, karakter, dan status cerita yang selalu dikirim ke AI, disematkan seperti brief, dengan tombol "Minta AI perbarui catatan" setiap kali satu bab selesai.
 - Cari kata di dalam naskah yang sedang dibuka.
 - Pilih teks → minta AI menulis ulang bagian itu.
 - Lampiran PDF (lewat API OCR DeepSeek).
-- Ringkasan bab lama untuk cerita yang sangat panjang.
+- **Ringkasan bab lama:** bab yang sudah selesai diganti ringkasannya (dibuat sekali per bab, disimpan supaya tetap kena cache); hanya aktif kalau konteks mendekati batas model atau dinyalakan sendiri.
 - Bungkus menjadi APK dengan Capacitor (opsional).
 
 **Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat.
