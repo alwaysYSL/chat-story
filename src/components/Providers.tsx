@@ -25,11 +25,18 @@ export function ModelPicker({
   onClose,
   value,
   onPick,
+  thinking,
+  onThinking,
+  peak,
 }: {
   open: boolean;
   onClose: () => void;
   value: ModelRef;
   onPick: (ref: ModelRef) => void;
+  /** kalau diisi, saklar mode berpikir tampil di atas daftar */
+  thinking?: boolean;
+  onThinking?: (v: boolean) => void;
+  peak?: boolean;
 }) {
   const s = useSettings();
   const nav = useNavigate();
@@ -41,7 +48,17 @@ export function ModelPicker({
     groups.set(it.provider.id, g);
   }
   return (
-    <Sheet open={open} onClose={onClose} title="Pilih model">
+    <Sheet open={open} onClose={onClose} title="Model">
+      {onThinking && (
+        <div className="sheet-toggle">
+          <span>
+            Mode berpikir
+            <small>AI berpikir dulu sebelum menulis. Lebih lambat, token berpikir ikut ditagih.</small>
+          </span>
+          <Toggle checked={!!thinking} onChange={onThinking} label="Mode berpikir" />
+        </div>
+      )}
+      {peak && <p className="note pad warn-text">Sekarang jam peak DeepSeek: harga DeepSeek 2×.</p>}
       {list.length === 0 && <p className="note pad">Belum ada penyedia dengan API key. Isi dulu di Pengaturan.</p>}
       {[...groups.values()].map((items) => (
         <div key={items[0].provider.id}>

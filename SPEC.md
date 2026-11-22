@@ -70,24 +70,33 @@ Bisa dilewati. Kalau API key belum diisi, tombol kirim di chat mengarahkan ke Pe
 - Tekan lama: ganti nama, hapus. Chat utama cerita **tidak bisa** dihapus terpisah (lihat 5.4).
 
 ### 4.3 Halaman chat
-- **Atas:** 🕘 riwayat, judul chat, ✏️ chat baru.
-- **Chip page:** `📄 Judul cerita` kalau chat terhubung ke page. Ketuk untuk membuka page.
-- **Brief** (pesan pertama chat utama) ditampilkan tersemat di atas dan bisa dibuka penuh.
-- **Pesan Anda:** teks + thumbnail lampiran.
-- **Balasan yang menulis ke page** tampil sebagai kartu ringkas, bukan teks penuh:
-  `✍ Menulis di «Bagian 3» · 642 kata · Rp9`
-  - Ketuk kartu → lompat ke bagian itu di page.
-  - Tombol **Coba lagi**, **Batalkan**, dan pemilih versi **‹ 1/3 ›**.
-- **Balasan diskusi** (saklar "Tulis ke page" mati) tampil sebagai teks biasa di chat.
-- **Kolom input:**
-  - `+` lampiran (gambar, file teks).
-  - Pilihan model dari semua penyedia yang API key-nya terisi, dan saklar thinking (default mati).
-  - Saklar **Tulis ke page** (default nyala di chat utama).
-  - Chip target: `Tulis ke: Bagian 3 ▾` dengan pilihan **+ Bab baru**.
-  - Pilihan panjang: **Pendek** (~300) · **Normal** (500–700) · **Panjang** (~1000) kata.
-  - Tombol **Lanjutkan saja** (AI melanjutkan tanpa arahan).
+Tampilan dan perilaku mengikuti aplikasi chat AI pada umumnya (ChatGPT, Claude, Notion AI).
+
+- **Atas:** ‹ kembali, judul chat, 🕘 riwayat, ✏️ chat baru. Di bawahnya chip page `📄 Judul cerita`.
+- **Brief** (pesan pertama chat utama) disematkan di atas daftar pesan dan bisa dilipat.
+- **Balasan yang menulis ke page** tampil sebagai kartu ringkas: `✍ Ditulis di Bagian 3 · 642 kata · Rp9 · model`. Ketuk untuk membuka bagian itu di page.
+- **Balasan diskusi** tampil sebagai teks biasa.
+- **Deretan ikon hanya di balasan terakhir:** Salin, Coba lagi, pemilih versi ‹ 1/3 ›, "Lanjutkan dari sini" (kalau terputus), dan ⋯ (menu aksi).
+- **Tahan bubble** membuka sheet aksi:
+  - Pesan terakhir: Salin · Edit & tulis ulang · Kirim ulang · Pilih teks · Hapus.
+  - Pesan lama: Salin · Pilih teks (pesan lama tidak bisa diedit).
+  - Brief: Salin · Edit brief saja · Pilih teks (+ Edit & tulis ulang pembukaan kalau belum ada lanjutan).
+  - Balasan AI: Salin · Buka di page · Pilih teks (diskusi); balasan terakhir juga Coba lagi, Lanjutkan dari sini, Batalkan.
+- **Error** tampil sebagai satu baris merah (ketuk untuk teks lengkap); Coba lagi ada di deretan ikon.
+- **Pasangan yang dibatalkan** dilipat jadi satu baris tipis "N balasan dibatalkan" (ketuk untuk melihat).
+- **Tombol ↓** muncul saat menggulir ke atas; daftar hanya mengikuti pesan baru kalau pengguna di bawah.
+- **Kolom ketik:** teks, lalu satu baris: `+` (Foto, File teks) · chip mode · chip model · tombol kirim.
+  - **Chip mode** (`✍ Normal`, `✍ Bab baru · Panjang`, `✍ Pembukaan`, `💬 Diskusi`) membuka sheet: Tulis ke page / Diskusi, tujuan (akhir bab terakhir / bab baru), panjang (Pendek / Normal / Panjang).
+  - **Chip model** membuka daftar model dan saklar mode berpikir. Ikon lampu = berpikir nyala; titik oranye = jam peak DeepSeek. Chat mengingat model terakhir yang dipakai.
+  - **Tombol kirim** berubah menjadi **Lanjutkan** saat kolom kosong dalam mode tulis (AI melanjutkan tanpa arahan); menjadi **Stop** selama AI menulis.
+  - Maksimal satu catatan di atas kolom ketik (bisa ditutup): API key belum ada, model tidak bisa membaca gambar, saran bab baru, atau info bab lama.
   - Draf yang belum terkirim disimpan otomatis.
-- **Selama AI menulis:** tombol **Stop**, layar dijaga tetap menyala (Wake Lock), panel chat mengecil dan pindah ke page supaya tulisan terlihat mengalir.
+- **Selama AI menulis:** layar dijaga tetap menyala (Wake Lock), dan aplikasi pindah ke page supaya tulisan terlihat mengalir.
+
+### 4.3a Navigasi tanpa riwayat berulang
+- Page membuka chat; setelah mengirim, chat **kembali** ke page itu (history back), bukan membuka page baru.
+- Kalau chat tidak dibuka dari page tujuan (chat baru dari Beranda, dari daftar chat, atau menulis ke bab baru), page **menggantikan** chat di riwayat.
+- Pindah antara page cerita dan bab (breadcrumb, daftar bab, Bab sebelumnya/berikutnya) menggantikan entri riwayat, jadi back dari page mana pun langsung kembali ke halaman sebelum cerita dibuka.
 
 ### 4.4 Page cerita dan page bab
 - **Atas:** ‹ kembali, breadcrumb di bab (`Judul cerita › Bagian 3`), ⤴ bagikan/ekspor, `⋯`.
@@ -160,6 +169,7 @@ Kalau saklar mati, chat ini hanya chat diskusi biasa (misalnya brainstorming ide
 
 ### 6.1 Parameter
 - Model default `deepseek-flash` (DeepSeek). Model lain dipilih dari Pengaturan → Penyedia AI, bisa diganti per pesan.
+- Kalau model menolak mode berpikir dimatikan ("reasoning is mandatory"), permintaan diulang otomatis tanpa parameter berpikir dengan batas token lebih besar, dan model itu diingat selama aplikasi terbuka.
 - Parameter thinking menyesuaikan model: DeepSeek/Vikey `thinking.type`, Poolside `chat_template_kwargs.enable_thinking`, OpenRouter `reasoning.enabled`, atau tidak dikirim.
 - Thinking default **mati** (`"thinking": {"type": "disabled"}`), karena token thinking ditagih sebagai output.
 - `stream: true`.

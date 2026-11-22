@@ -24,6 +24,7 @@ import { BottomBar, PromptSheet, Sheet, SheetItem, toast } from '../components/u
 import { getBrief } from '../lib/context';
 import { stopGeneration, useActiveGen } from '../lib/generate';
 import { displayTitle, getMainChat, moveChapter, renamePage } from '../lib/pages';
+import { takeJump, type NavState } from '../lib/nav';
 import { useSettings } from '../lib/settings';
 import { debounce, formatNumber, formatRupiah, formatUsd } from '../lib/util';
 
@@ -86,7 +87,8 @@ export default function PageView() {
     requestAnimationFrame(() => {
       const el = scrollRef.current;
       if (!el) return;
-      const seg = params.get('seg');
+      const jump = takeJump(page.id);
+      const seg = jump?.seg ?? params.get('seg');
       if (seg) {
         const target = el.querySelector(`[data-seg="${CSS.escape(seg)}"]`);
         if (target) {
@@ -94,9 +96,11 @@ export default function PageView() {
           target.classList.add('flash');
           setTimeout(() => target.classList.remove('flash'), 1600);
         }
-        params.delete('seg');
-        setParams(params, { replace: true });
-      } else if (params.get('end')) {
+        if (params.get('seg')) {
+          params.delete('seg');
+          setParams(params, { replace: true });
+        }
+      } else if (jump?.end || params.get('end')) {
         el.scrollTop = el.scrollHeight;
       } else {
         el.scrollTop = page.scrollY;
@@ -140,6 +144,7 @@ export default function PageView() {
     ? `/chat/${mainChat.id}?from=${page.id}`
     : `/chat/new?page=${rootId}&from=${page.id}`;
   const empty = !page.text.trim();
+  const askState: NavState = { fromPage: page.id };
 
   const openBrief = async () => {
     if (!mainChat) {
@@ -163,7 +168,7 @@ export default function PageView() {
         </button>
         <div className="crumb">
           {isChapter && root && (
-            <Link to={`/page/${root.id}`} className="crumb-link">
+            <Link to={`/page/${root.id}`} replace className="crumb-link">
               {root.icon} {displayTitle(root)} ›
             </Link>
           )}
@@ -246,7 +251,7 @@ export default function PageView() {
             {!isChapter && (chapters?.length ?? 0) > 0 && (
               <div className="child-links">
                 {chapters!.map((c) => (
-                  <Link key={c.id} to={`/page/${c.id}`} className="child-link">
+                  <Link key={c.id} to={`/page/${c.id}`} replace className="child-link">
                     <IconPage size={18} /> {displayTitle(c)}
                     <small>{formatNumber(c.words)} kata</small>
                   </Link>
@@ -256,14 +261,14 @@ export default function PageView() {
             {(prev || next) && (
               <div className="chapter-nav">
                 {prev ? (
-                  <Link to={`/page/${prev.id}`} className="btn">
+                  <Link to={`/page/${prev.id}`} replace className="btn">
                     ‹ {isChapter && prev.id === rootId ? 'Pembukaan' : 'Bab sebelumnya'}
                   </Link>
                 ) : (
                   <span />
                 )}
                 {next ? (
-                  <Link to={`/page/${next.id}`} className="btn">
+                  <Link to={`/page/${next.id}`} replace className="btn">
                     Bab berikutnya ›
                   </Link>
                 ) : (
@@ -300,7 +305,7 @@ export default function PageView() {
           <span className="gen-text">
             {gen.thinking && !gen.live ? 'AI sedang berpikir…' : `AI sedang menulis · ${formatNumber(gen.words)} kata`}
           </span>
-          <button className="btn btn-small" onClick={() => nav(`/chat/${gen.chatId}`)}>
+          <button className="btn btn-small" onClick={() => nav(`/chat/${gen.chatId}`, { state: askState })}>
             <IconChat size={16} /> Chat
           </button>
           <button className="btn btn-small btn-danger" onClick={stopGeneration}>
@@ -308,7 +313,7 @@ export default function PageView() {
           </button>
         </div>
       ) : (
-        !editing && <BottomBar askHref={askHref} />
+        !editing && <BottomBar askHref={askHref} askState={askState} />
       )}
 
       <PageMenu
@@ -333,7 +338,7 @@ export default function PageView() {
               hint="AI membaca cerita, tapi tidak menulis ke page"
               onClick={() => {
                 setMenuOpen(false);
-                nav(`/chat/new?page=${rootId}&kind=discuss`);
+                nav(`/chat/new?page=${rootId}&kind=discuss&from=${page.id}`, { state: askState });
               }}
             />
             <SheetItem

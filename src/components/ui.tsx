@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { IconChat, IconEdit, IconHome, IconSearch, IconSparkle } from './Icons';
@@ -223,14 +223,14 @@ export function TopTabs() {
   );
 }
 
-export function BottomBar({ askHref }: { askHref: string }) {
+export function BottomBar({ askHref, askState }: { askHref: string; askState?: unknown }) {
   const nav = useNavigate();
   return (
     <div className="bottom-bar">
       <button className="round-btn" aria-label="Cari" onClick={() => nav('/search')}>
         <IconSearch />
       </button>
-      <button className="ask-ai" onClick={() => nav(askHref)}>
+      <button className="ask-ai" onClick={() => nav(askHref, askState ? { state: askState } : undefined)}>
         <span className="ask-ai-icon">
           <IconSparkle size={16} />
         </span>
@@ -263,4 +263,54 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
       <span className="toggle-knob" />
     </button>
   );
+}
+
+/* ---------- Tahan lama (long press) ---------- */
+
+/**
+ * Tahan ±0,5 detik untuk membuka menu aksi. Batal kalau jari bergeser (menggulir).
+ * Klik kanan / menu konteks bawaan Android juga membuka menu yang sama.
+ */
+export function useLongPress(onLong: () => void, ms = 480) {
+  const timer = useRef<number | null>(null);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const fired = useRef(false);
+  const clear = () => {
+    if (timer.current) window.clearTimeout(timer.current);
+    timer.current = null;
+  };
+  const fire = () => {
+    fired.current = true;
+    navigator.vibrate?.(12);
+    onLong();
+  };
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      fired.current = false;
+      start.current = { x: e.clientX, y: e.clientY };
+      clear();
+      timer.current = window.setTimeout(fire, ms);
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      if (start.current && Math.hypot(e.clientX - start.current.x, e.clientY - start.current.y) > 10) clear();
+    },
+    onPointerUp: clear,
+    onPointerCancel: clear,
+    onPointerLeave: clear,
+    onContextMenu: (e: React.MouseEvent) => {
+      e.preventDefault();
+      if (fired.current) return;
+      clear();
+      fire();
+    },
+    onClickCapture: (e: React.MouseEvent) => {
+      // Jangan teruskan "klik" yang terjadi saat jari dilepas setelah menahan.
+      if (fired.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        fired.current = false;
+      }
+    },
+  };
 }
