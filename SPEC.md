@@ -1,6 +1,6 @@
 # Chat Story — Spesifikasi Aplikasi
 
-Aplikasi Android (PWA) untuk menulis cerita hobi bersama AI DeepSeek, dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan.
+Aplikasi Android (PWA) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan.
 
 Status: **disepakati, siap dibangun (Versi 1)**.
 
@@ -10,7 +10,7 @@ Status: **disepakati, siap dibangun (Versi 1)**.
 
 - **Satu tujuan:** menulis cerita bersama AI. Tidak ada fitur di luar itu.
 - **Data hanya di HP.** Tidak ada server, akun, atau sinkronisasi cloud.
-- **Hemat secara default:** thinking mati, cache DeepSeek dimaksimalkan, biaya terlihat di setiap balasan.
+- **Hemat secara default:** thinking mati, cache penyedia dimaksimalkan, biaya terlihat di setiap balasan (kalau harga model diketahui).
 - **Mirip Notion mobile:** Beranda berisi daftar page, page langsung menampilkan naskah, Ask AI di bawah, chat AI menulis langsung ke page.
 - **Bahasa antarmuka:** Indonesia. **Tema:** mengikuti pengaturan HP (terang/gelap).
 
@@ -23,7 +23,7 @@ Status: **disepakati, siap dibangun (Versi 1)**.
 | Editor | TipTap (ProseMirror) |
 | Penyimpanan | IndexedDB (via Dexie), dengan permintaan *persistent storage* |
 | PWA | vite-plugin-pwa (offline + update otomatis) |
-| AI | `fetch` langsung ke `https://api.deepseek.com` (format OpenAI, streaming) |
+| AI | `fetch` langsung ke penyedia pilihan (format OpenAI Chat Completions, streaming) |
 | Hosting | GitHub Pages, deploy otomatis via GitHub Actions dari repo ini |
 
 Kode yang sama bisa dibungkus menjadi APK dengan Capacitor di kemudian hari (Versi 2, opsional).
@@ -47,8 +47,8 @@ Bar bawah (di Beranda, tab Chat, dan page): **🔍 Cari · Ask AI · ✏️ Page
 ## 4. Layar
 
 ### 4.0 Onboarding (sekali, saat pertama dibuka)
-1. Masukkan API key DeepSeek (dengan tautan dan cara mendapatkannya di platform.deepseek.com).
-2. Tes koneksi dan tampilkan saldo.
+1. Pilih penyedia AI (DeepSeek, Vikey, Poolside, OpenRouter) dan masukkan API key-nya.
+2. Tes koneksi. DeepSeek: cek saldo. Penyedia lain: kirim satu pesan sangat pendek.
 3. Minta izin penyimpanan permanen, lalu panduan bergambar "Tambahkan ke layar utama" di Chrome Android.
 
 Bisa dilewati. Kalau API key belum diisi, tombol kirim di chat mengarahkan ke Pengaturan.
@@ -81,7 +81,7 @@ Bisa dilewati. Kalau API key belum diisi, tombol kirim di chat mengarahkan ke Pe
 - **Balasan diskusi** (saklar "Tulis ke page" mati) tampil sebagai teks biasa di chat.
 - **Kolom input:**
   - `+` lampiran (gambar, file teks).
-  - Pilihan model: **Flash** (default) / **Pro**, dan saklar thinking (default mati).
+  - Pilihan model dari semua penyedia yang API key-nya terisi, dan saklar thinking (default mati).
   - Saklar **Tulis ke page** (default nyala di chat utama).
   - Chip target: `Tulis ke: Bagian 3 ▾` dengan pilihan **+ Bab baru**.
   - Pilihan panjang: **Pendek** (~300) · **Normal** (500–700) · **Panjang** (~1000) kata.
@@ -107,7 +107,8 @@ Bisa dilewati. Kalau API key belum diisi, tombol kirim di chat mengarahkan ke Pe
 Mencari di judul dan isi semua page, serta judul chat.
 
 ### 4.6 Pengaturan
-- **AI:** API key (bisa dihapus), tes koneksi, saldo, model default, thinking default, kreativitas (Stabil / Normal / Liar).
+- **Penyedia AI:** daftar penyedia (DeepSeek, Vikey, Poolside, OpenRouter bawaan, plus penyedia lain yang bisa ditambah). Per penyedia: nama, base URL, API key, tes koneksi, dan daftar model. Per model: model id, nama tampilan, bisa membaca gambar atau tidak, cara mengatur thinking, dan harga per 1 juta token (USD atau Rupiah; boleh kosong).
+- **Model default**, thinking default, kreativitas (Stabil / Normal / Liar).
 - **Panjang tulisan:** target pembukaan (default 2000–3000 kata), target lanjutan (default 500–700 kata), batas saran bab baru (default 5.000 kata).
 - **Biaya:** kurs USD → Rupiah (manual), peringatan jam peak (08–11 dan 13–17 WIB, Senin–Jumat).
 - **Tampilan baca:** ukuran huruf, jarak baris, serif/sans, penanda batas balasan AI.
@@ -158,10 +159,11 @@ Kalau saklar mati, chat ini hanya chat diskusi biasa (misalnya brainstorming ide
 ## 6. AI
 
 ### 6.1 Parameter
-- Model default `deepseek-flash`, pilihan `deepseek-v4-pro`.
+- Model default `deepseek-flash` (DeepSeek). Model lain dipilih dari Pengaturan → Penyedia AI, bisa diganti per pesan.
+- Parameter thinking menyesuaikan model: DeepSeek/Vikey `thinking.type`, Poolside `chat_template_kwargs.enable_thinking`, OpenRouter `reasoning.enabled`, atau tidak dikirim.
 - Thinking default **mati** (`"thinking": {"type": "disabled"}`), karena token thinking ditagih sebagai output.
 - `stream: true`.
-- Temperature dari pilihan kreativitas (nilai pasti ditentukan saat implementasi sesuai rekomendasi DeepSeek untuk penulisan kreatif).
+- Temperature dari pilihan kreativitas: model DeepSeek 1,2 / 1,5 / 1,7 (DeepSeek merekomendasikan 1,5 untuk penulisan kreatif); model lain 0,6 / 0,85 / 1,0.
 - `max_tokens` = pengaman di atas target, kira-kira 2,5 × jumlah kata maksimal target. Panjang utama diatur lewat prompt.
 
 ### 6.2 Susunan pesan (chat utama)
@@ -195,22 +197,24 @@ user   : brief + seluruh naskah (berurutan per bab) + pertanyaan pertama
 ```
 
 ### 6.4 Cache dan biaya
-- Susunan di atas bersifat *append-only*, cocok dengan context caching DeepSeek: bagian awal yang sama persis ditagih tarif cache hit.
+- Susunan di atas bersifat *append-only*, cocok dengan context caching: bagian awal yang sama persis ditagih tarif cache (DeepSeek, Vikey, dan penyedia lain yang mendukung cache).
+- Jam peak (harga 2×) hanya berlaku untuk DeepSeek resmi.
+- "Lanjutkan dari sini": DeepSeek memakai Chat Prefix Completion; penyedia lain menerima teks terpotong sebagai jawaban lalu diminta menyambung.
 - Edit bab lama, ubah brief, ubah urutan bab, atau hapus bab membuat cache reset mulai dari titik perubahan, hanya untuk satu permintaan berikutnya.
 - Setiap balasan menyimpan dan menampilkan: token input cache hit, cache miss, token output, biaya USD dan Rupiah, jumlah kata sebenarnya.
 - Harga dihitung dari tabel harga (off-peak/peak) yang disimpan di aplikasi dan bisa diperbarui lewat update aplikasi.
 
 ### 6.5 Error yang ditangani (pesan bahasa Indonesia)
-Tidak ada internet · API key salah · saldo habis · terlalu banyak permintaan · server sibuk · konten/gambar ditolak oleh pemeriksaan konten DeepSeek · koneksi terputus saat streaming.
+Tidak ada internet · API key salah · saldo habis · terlalu banyak permintaan · server sibuk · model/alamat tidak ditemukan · konten/gambar ditolak oleh pemeriksaan konten penyedia · koneksi terputus saat streaming.
 
 ---
 
 ## 7. Lampiran
 
 - **Gambar** (JPEG, PNG, WebP, GIF) untuk referensi karakter, lokasi, dan suasana. AI hanya **membaca** gambar; aplikasi tidak membuat gambar.
-  - Diperkecil otomatis di HP sebelum disimpan (DeepSeek juga memperkecilnya, jadi tidak ada kualitas yang hilang).
+  - Diperkecil otomatis di HP sebelum disimpan (penyedia juga memperkecilnya, jadi tidak ada kualitas yang hilang).
   - Satu gambar maksimal sekitar 1024 token. Gambar di brief ikut kena cache setelah permintaan pertama.
-  - Hanya `deepseek-flash` yang mendukung gambar. Kalau model Pro dipilih dan konteks berisi gambar, aplikasi memberi peringatan.
+  - Hanya model yang ditandai "bisa membaca gambar" yang menerima gambar. Untuk model lain gambar dilewati dan aplikasi memberi peringatan.
 - **File teks** (`.txt`, `.md`): isinya disisipkan sebagai teks dengan nama file.
 - PDF: Versi 2.
 
@@ -238,7 +242,8 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 ## 10. Keamanan
 - API key hanya disimpan di HP dan tidak ikut di file backup.
 - Tidak memakai script pihak ketiga.
-- Content Security Policy membatasi koneksi hanya ke `api.deepseek.com`.
+- API key setiap penyedia hanya disimpan di HP dan tidak ikut di file backup.
+- Content Security Policy hanya mengizinkan kode aplikasi sendiri. Koneksi boleh ke alamat `https` mana pun supaya penyedia bisa dipilih bebas.
 - Repo public hanya berisi kode, tanpa data atau kunci.
 
 ## 11. Offline dan performa
@@ -280,3 +285,4 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 | Coba lagi | Simpan maksimal 3 versi |
 | Lampiran | Gambar (baca saja) dan file teks |
 | Pembuatan gambar | Tidak dibuat |
+| Penyedia AI | DeepSeek, Vikey, Poolside, OpenRouter bawaan, plus penyedia lain berformat OpenAI; model bisa diganti per pesan |

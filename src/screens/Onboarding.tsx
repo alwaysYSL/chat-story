@@ -2,22 +2,26 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { IconSparkle } from '../components/Icons';
 import { toast } from '../components/ui';
-import { getBalance } from '../lib/deepseek';
+import { testProvider } from '../lib/api';
+import { PROVIDER_INFO } from '../lib/providers';
 import { updateSettings, useSettings } from '../lib/settings';
 
 export default function Onboarding() {
   const nav = useNavigate();
   const s = useSettings();
   const [step, setStep] = useState(0);
+  const [providerId, setProviderId] = useState('deepseek');
   const [key, setKey] = useState('');
   const [balance, setBalance] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const standalone = window.matchMedia('(display-mode: standalone)').matches;
 
+  const provider = s?.providers.find((p) => p.id === providerId);
   useEffect(() => {
-    if (s?.apiKey) setKey(s.apiKey);
-  }, [s?.apiKey]);
+    setKey(provider?.apiKey ?? '');
+    setBalance(null);
+  }, [providerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [finishing, setFinishing] = useState(false);
   const finish = async () => {
@@ -30,12 +34,16 @@ export default function Onboarding() {
   }, [finishing, s?.onboarded, nav]);
 
   const test = async () => {
-    if (!key.trim()) return;
+    if (!key.trim() || !s || !provider) return;
     setTesting(true);
     try {
-      const b = await getBalance(key.trim());
-      await updateSettings({ apiKey: key.trim() });
-      setBalance(b.text);
+      const next = { ...provider, apiKey: key.trim() };
+      const r = await testProvider(next);
+      await updateSettings({
+        providers: s.providers.map((p) => (p.id === next.id ? next : p)),
+        defaultModel: { provider: next.id, model: next.models[0].id },
+      });
+      setBalance(r.text);
     } catch (e) {
       toast((e as Error).message);
     } finally {
@@ -58,10 +66,10 @@ export default function Onboarding() {
               <IconSparkle size={40} />
             </div>
             <h1>Chat Story</h1>
-            <p>Tulis cerita bersama AI DeepSeek. Mulai dari chat: tulis brief cerita, lalu AI menulis pembukaan langsung di page. Lanjutkan dengan arahan singkat.</p>
+            <p>Tulis cerita bersama AI. Mulai dari chat: tulis brief cerita, lalu AI menulis pembukaan langsung di page. Lanjutkan dengan arahan singkat.</p>
             <ul className="ob-list">
               <li>Semua cerita tersimpan hanya di HP ini.</li>
-              <li>Biaya dibayar langsung ke DeepSeek dengan API key Anda sendiri.</li>
+              <li>Pakai API key Anda sendiri: DeepSeek, Vikey, Poolside, OpenRouter, atau penyedia lain.</li>
               <li>Setiap balasan AI menampilkan biayanya.</li>
             </ul>
             <button className="btn btn-primary wide" onClick={() => setStep(1)}>
@@ -72,22 +80,35 @@ export default function Onboarding() {
 
         {step === 1 && (
           <div className="ob-card">
-            <h2>1. API key DeepSeek</h2>
-            <ol className="ob-list">
-              <li>
-                Buka{' '}
-                <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">
-                  platform.deepseek.com/api_keys
-                </a>{' '}
-                dan masuk.
-              </li>
-              <li>Isi saldo (top up) secukupnya, misalnya $2.</li>
-              <li>Buat API key baru, salin, lalu tempel di bawah.</li>
-            </ol>
+            <h2>1. Penyedia AI</h2>
+            <div className="segmented wrap">
+              {(s?.providers ?? []).map((p) => (
+                <button key={p.id} className={providerId === p.id ? 'active' : ''} onClick={() => setProviderId(p.id)}>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+            {provider && (
+              <>
+                <p className="note">{PROVIDER_INFO[provider.kind].note}</p>
+                <ol className="ob-list">
+                  <li>
+                    Buka{' '}
+                    <a href={PROVIDER_INFO[provider.kind].keyUrl} target="_blank" rel="noreferrer">
+                      {new URL(PROVIDER_INFO[provider.kind].keyUrl).hostname}
+                    </a>{' '}
+                    dan masuk.
+                  </li>
+                  <li>Isi saldo secukupnya kalau penyedianya berbayar.</li>
+                  <li>Buat API key baru, salin, lalu tempel di bawah.</li>
+                </ol>
+              </>
+            )}
+            <p className="note">Penyedia lain dan model tambahan bisa diatur nanti di Pengaturan → Penyedia AI.</p>
             <input
               className="input"
               type="password"
-              placeholder="sk-…"
+              placeholder="Tempel API key"
               autoComplete="off"
               value={key}
               onChange={(e) => setKey(e.target.value)}
@@ -95,7 +116,7 @@ export default function Onboarding() {
             <button className="btn btn-primary wide" disabled={!key.trim() || testing} onClick={() => void test()}>
               {testing ? 'Mengecek…' : 'Tes koneksi'}
             </button>
-            {balance && <p className="note ok">Berhasil terhubung. Saldo: {balance}</p>}
+            {balance && <p className="note ok">{balance}</p>}
             <div className="row-buttons">
               <button className="btn" onClick={() => setStep(2)}>
                 {balance ? 'Lanjut' : 'Lewati dulu'}

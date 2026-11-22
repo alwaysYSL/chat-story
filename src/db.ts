@@ -1,8 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type { JSONContent } from '@tiptap/react';
 
-export type ModelId = 'deepseek-flash' | 'deepseek-v4-pro';
-
 export interface Page {
   id: string;
   /** null = page cerita (induk), terisi = bab (sub-page) */
@@ -81,12 +79,17 @@ export interface Message {
   expectTitle: boolean;
   status: MsgStatus;
   error: string | null;
-  model: ModelId;
+  /** id penyedia di Pengaturan; kosong di data versi pertama (= DeepSeek) */
+  provider?: string;
+  /** model id yang dikirim ke penyedia */
+  model: string;
   thinking: boolean;
   versions: Version[];
   active: number;
   /** total biaya semua versi + percobaan */
   costUsd: number;
+  /** ada permintaan yang harganya tidak diketahui (harga model belum diisi) */
+  costUnknown?: boolean;
   createdAt: number;
 }
 

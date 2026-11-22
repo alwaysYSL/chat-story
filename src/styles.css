@@ -1409,3 +1409,71 @@ input[type='range'] {
   box-shadow: var(--shadow);
   animation: fade 0.15s;
 }
+
+/* ---------- Penyedia AI ---------- */
+.sheet-group {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  padding: 12px 12px 2px;
+}
+.provider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.provider-row.add {
+  color: var(--accent);
+}
+.provider-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.provider-text b {
+  font-weight: 500;
+}
+.provider-text small {
+  color: var(--text-3);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.dot.on {
+  background: var(--ok);
+}
+.form-pad {
+  padding: 0 12px 8px;
+}
+.sub-head {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin: 20px 0 4px;
+}
+.segmented.wrap {
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.note.err {
+  color: var(--danger);
+}
+.model-chip {
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
