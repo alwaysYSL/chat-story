@@ -3,11 +3,9 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { IconBack } from '../components/Icons';
 import { Sheet, SheetItem, Toggle, toast } from '../components/ui';
 import { backupFileName, createBackup, markBackedUp, restoreBackup } from '../lib/backup';
-import { getBalance } from '../lib/deepseek';
-import { MODEL_LABEL, PRICES } from '../lib/pricing';
+import { ProviderList } from '../components/Providers';
 import { CREATIVITY_LABEL, updateSettings, useSettings, type Creativity, type Settings } from '../lib/settings';
 import { downloadFile, shareFile, timeAgo } from '../lib/util';
-import type { ModelId } from '../db';
 
 function NumberField({
   label,
@@ -71,17 +69,9 @@ export default function SettingsScreen() {
   const s = useSettings();
   const nav = useNavigate();
   const loc = useLocation();
-  const [key, setKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [balance, setBalance] = useState<string | null>(null);
-  const [testing, setTesting] = useState(false);
   const [storage, setStorage] = useState<{ used: string; persisted: boolean } | null>(null);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (s) setKey(s.apiKey);
-  }, [s?.apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     void (async () => {
@@ -99,26 +89,6 @@ export default function SettingsScreen() {
 
   if (!s) return <div className="screen" />;
   const set = (patch: Partial<Settings>) => void updateSettings(patch);
-
-  const test = async () => {
-    const k = key.trim();
-    if (!k) {
-      toast('Masukkan API key dulu.');
-      return;
-    }
-    setTesting(true);
-    try {
-      const b = await getBalance(k);
-      setBalance(b.text + (b.available ? '' : ' (saldo tidak cukup)'));
-      if (k !== s.apiKey) await updateSettings({ apiKey: k });
-      toast('Koneksi berhasil');
-    } catch (e) {
-      setBalance(null);
-      toast((e as Error).message);
-    } finally {
-      setTesting(false);
-    }
-  };
 
   const doBackup = async () => {
     const blob = await createBackup();
@@ -149,70 +119,19 @@ export default function SettingsScreen() {
         <div className="chat-head-title">Pengaturan</div>
       </header>
       <div className="scroll-area settings">
-        <section id="ai">
-          <h3>AI DeepSeek</h3>
-          <label className="field">
-            <span>API key</span>
-            <div className="key-row">
-              <input
-                className="input"
-                type={showKey ? 'text' : 'password'}
-                value={key}
-                placeholder="sk-…"
-                autoComplete="off"
-                onChange={(e) => setKey(e.target.value)}
-                onBlur={() => key.trim() !== s.apiKey && set({ apiKey: key.trim() })}
-              />
-              <button className="btn btn-small" onClick={() => setShowKey((v) => !v)}>
-                {showKey ? 'Sembunyi' : 'Lihat'}
-              </button>
-            </div>
-            <small>
-              Dapatkan di{' '}
-              <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">
-                platform.deepseek.com
-              </a>
-              . Disimpan hanya di HP ini dan tidak ikut backup.
-            </small>
-          </label>
-          <div className="row-buttons left">
-            <button className="btn btn-primary" disabled={testing} onClick={() => void test()}>
-              {testing ? 'Mengecek…' : 'Tes koneksi & cek saldo'}
-            </button>
-            {s.apiKey && (
-              <button
-                className="btn btn-danger"
-                onClick={() => {
-                  setKey('');
-                  setBalance(null);
-                  set({ apiKey: '' });
-                  toast('API key dihapus');
-                }}
-              >
-                Hapus key
-              </button>
-            )}
-          </div>
-          {balance && <p className="note">Saldo: {balance}</p>}
-
-          <div className="field-row">
-            <span>Model default</span>
-            <Segmented<ModelId>
-              value={s.model}
-              options={[
-                { value: 'deepseek-flash', label: MODEL_LABEL['deepseek-flash'] },
-                { value: 'deepseek-v4-pro', label: MODEL_LABEL['deepseek-v4-pro'] },
-              ]}
-              onChange={(v) => set({ model: v })}
-            />
-          </div>
+        <section id="penyedia">
+          <h3>Penyedia AI</h3>
           <p className="note">
-            Flash: ${PRICES['deepseek-flash'].miss}/${PRICES['deepseek-flash'].out} per 1 juta token input/output, bisa membaca gambar. Pro:
-            ${PRICES['deepseek-v4-pro'].miss}/${PRICES['deepseek-v4-pro'].out}, tidak bisa membaca gambar. Harga off-peak.
+            Isi API key untuk penyedia yang Anda pakai. Model bisa diganti per pesan lewat tombol model di kolom chat.
           </p>
+          <ProviderList />
+        </section>
+
+        <section id="ai">
+          <h3>Gaya AI</h3>
           <div className="field-row">
             <span>
-              Mode berpikir (thinking)
+              Mode berpikir (thinking) default
               <small>Token berpikir ditagih sebagai output. Biasanya tidak perlu untuk cerita.</small>
             </span>
             <Toggle checked={s.thinking} onChange={(v) => set({ thinking: v })} label="Mode berpikir" />
@@ -250,8 +169,8 @@ export default function SettingsScreen() {
           <NumberField label="Kurs 1 USD" value={s.usdToIdr} min={1000} max={100000} suffix="Rupiah" onChange={(n) => set({ usdToIdr: n })} />
           <div className="field-row">
             <span>
-              Peringatan jam peak
-              <small>08:00–11:00 dan 13:00–17:00 WIB, Senin–Jumat. Harga 2×.</small>
+              Peringatan jam peak DeepSeek
+              <small>08:00–11:00 dan 13:00–17:00 WIB, Senin–Jumat. Harga DeepSeek 2×.</small>
             </span>
             <Toggle checked={s.peakWarning} onChange={(v) => set({ peakWarning: v })} label="Peringatan jam peak" />
           </div>

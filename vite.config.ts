@@ -3,7 +3,8 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
-// Content Security Policy: hanya boleh memuat kode sendiri dan terhubung ke DeepSeek.
+// Content Security Policy: hanya boleh menjalankan kode sendiri. Koneksi boleh ke alamat https mana pun
+// supaya penyedia AI bisa dipilih bebas (DeepSeek, Vikey, Poolside, OpenRouter, atau penyedia lain).
 // Dipasang hanya saat build supaya tidak bentrok dengan skrip dev server.
 const CSP = [
   "default-src 'self'",
@@ -11,7 +12,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self'",
-  "connect-src 'self' https://api.deepseek.com",
+  "connect-src 'self' https:",
   "worker-src 'self'",
   "manifest-src 'self'",
   "object-src 'none'",

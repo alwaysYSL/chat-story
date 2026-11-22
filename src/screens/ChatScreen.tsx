@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { db, type Attachment, type LengthPreset, type Message, type ModelId, type Page } from '../db';
+import { db, type Attachment, type LengthPreset, type Message, type Page } from '../db';
 import { MarkdownView } from '../components/Blocks';
 import {
   IconBack,
@@ -16,6 +16,7 @@ import {
   IconSparkle,
   IconStop,
 } from '../components/Icons';
+import { ModelPicker } from '../components/Providers';
 import { PromptSheet, Sheet, SheetItem, Toggle, toast } from '../components/ui';
 import {
   cancelMessage,
@@ -30,7 +31,8 @@ import {
 } from '../lib/generate';
 import { compressImage, IMAGE_TYPES, MAX_TEXT_BYTES, TEXT_EXT } from '../lib/images';
 import { displayTitle } from '../lib/pages';
-import { isPeak, MODEL_LABEL } from '../lib/pricing';
+import { isPeak } from '../lib/pricing';
+import { findModel, usableModels, type ModelRef } from '../lib/providers';
 import { LENGTH_LABEL, targetRange } from '../lib/prompts';
 import { useSettings } from '../lib/settings';
 import { debounce, formatNumber, formatRupiah } from '../lib/util';
@@ -74,7 +76,8 @@ export default function ChatScreen() {
   const [write, setWrite] = useState(true);
   const [target, setTarget] = useState<'last' | 'new'>('last');
   const [length, setLength] = useState<LengthPreset>('normal');
-  const [model, setModel] = useState<ModelId | null>(null);
+  const [model, setModel] = useState<ModelRef | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [thinking, setThinking] = useState<boolean | null>(null);
   const [targetOpen, setTargetOpen] = useState(false);
   const [editMsg, setEditMsg] = useState<Message | null>(null);
@@ -84,7 +87,13 @@ export default function ChatScreen() {
   const listRef = useRef<HTMLDivElement>(null);
   const loadedDraft = useRef(false);
 
-  const effModel: ModelId = model ?? settings?.model ?? 'deepseek-flash';
+  // Model aktif: pilihan di chat ini → model default → model pertama yang punya API key.
+  const usable = settings ? usableModels(settings.providers) : [];
+  const pickRef = (r: ModelRef | null | undefined) =>
+    r && usable.some((u) => u.provider.id === r.provider && u.model.id === r.model) ? r : null;
+  const firstUsable = usable[0] ? { provider: usable[0].provider.id, model: usable[0].model.id } : null;
+  const effModel: ModelRef | null = pickRef(model) ?? pickRef(settings?.defaultModel) ?? firstUsable;
+  const resolved = settings && effModel ? findModel(settings.providers, effModel) : null;
   const effThinking = thinking ?? settings?.thinking ?? false;
 
   // Muat draf
@@ -146,7 +155,7 @@ export default function ChatScreen() {
   const lastWriteAsst = [...(messages ?? [])]
     .reverse()
     .find((m) => m.role === 'assistant' && m.status !== 'canceled');
-  const peak = settings.peakWarning && isPeak();
+  const peak = settings.peakWarning && isPeak() && resolved?.provider.kind === 'deepseek';
 
   const pickFiles = async (files: FileList | null) => {
     if (!files) return;
@@ -183,6 +192,11 @@ export default function ChatScreen() {
     const body = opts?.continueOnly ? '' : text;
     if (!opts?.continueOnly && !body.trim() && !pending.length) return;
     if (sending) return;
+    if (!effModel) {
+      toast('Isi API key salah satu penyedia AI dulu di Pengaturan.');
+      nav('/settings#penyedia');
+      return;
+    }
     setSending(true);
     try {
       const res = await sendMessage({
@@ -331,8 +345,18 @@ export default function ChatScreen() {
         {fromOld && (
           <div className="composer-note">AI hanya menulis di akhir bab terakhir ({displayTitle(lastPage)}) atau di bab baru.</div>
         )}
-        {effModel !== 'deepseek-flash' && hasImages && (
-          <div className="composer-note warn">Model Pro tidak bisa membaca gambar. Gambar akan dilewati; pakai Flash kalau gambar penting.</div>
+        {!effModel && (
+          <div className="composer-note warn">
+            Belum ada penyedia AI dengan API key.
+            <button className="link-btn" onClick={() => nav('/settings#penyedia')}>
+              Atur sekarang
+            </button>
+          </div>
+        )}
+        {resolved && !resolved.model.vision && hasImages && (
+          <div className="composer-note warn">
+            {resolved.model.label} tidak bisa membaca gambar. Gambar akan dilewati; pilih model yang bisa membaca gambar kalau gambar penting.
+          </div>
         )}
 
         {canWrite && (
@@ -412,12 +436,8 @@ export default function ChatScreen() {
                 e.target.value = '';
               }}
             />
-            <button
-              className="chip"
-              aria-label="Ganti model"
-              onClick={() => setModel(effModel === 'deepseek-flash' ? 'deepseek-v4-pro' : 'deepseek-flash')}
-            >
-              {MODEL_LABEL[effModel]}
+            <button className="chip model-chip" aria-label="Ganti model" onClick={() => setPickerOpen(true)}>
+              {resolved ? resolved.model.label : 'Pilih model'} <IconChevronDown size={14} />
             </button>
             <button
               className={'chip' + (effThinking ? ' active' : '')}
@@ -444,6 +464,13 @@ export default function ChatScreen() {
           </div>
         </div>
       </div>
+
+      <ModelPicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        value={effModel ?? { provider: '', model: '' }}
+        onPick={setModel}
+      />
 
       <Sheet open={targetOpen} onClose={() => setTargetOpen(false)} title="Tulis ke">
         <SheetItem
@@ -489,6 +516,15 @@ export default function ChatScreen() {
       />
     </div>
   );
+}
+
+function costLabel(m: Message, rate: number): string {
+  if (m.costUsd > 0) return formatRupiah(m.costUsd * rate) + (m.costUnknown ? '+' : '');
+  return m.costUnknown ? 'biaya tidak diketahui' : '';
+}
+
+function shortModel(id: string): string {
+  return id.split('/').pop() ?? id;
 }
 
 function UserBubble({
@@ -590,11 +626,7 @@ function WriteCard({
             <small>
               {status === 'streaming'
                 ? `${formatNumber(live)} kata…`
-                : v
-                  ? `${formatNumber(v.words)} kata · ${formatRupiah(m.costUsd * rate)}`
-                  : m.costUsd
-                    ? formatRupiah(m.costUsd * rate)
-                    : ''}
+                : [v ? `${formatNumber(v.words)} kata` : '', costLabel(m, rate), shortModel(m.model)].filter(Boolean).join(' · ')}
               {status === 'stopped' && ' · dihentikan'}
               {status === 'interrupted' && ' · terputus'}
             </small>
@@ -688,7 +720,7 @@ function DiscussBubble({
       </div>
       {live === null && (
         <div className="msg-meta">
-          {m.costUsd > 0 && <span>{formatRupiah(m.costUsd * rate)}</span>}
+          <span>{[costLabel(m, rate), shortModel(m.model)].filter(Boolean).join(' · ')}</span>
           {m.status === 'interrupted' && <span>terputus</span>}
           {m.status === 'stopped' && <span>dihentikan</span>}
           {isLast && (m.status === 'error' || m.status === 'interrupted' || m.status === 'stopped' || m.status === 'done') && (

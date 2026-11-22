@@ -1,22 +1,8 @@
-import type { ModelId, Usage } from '../db';
+import type { Usage } from '../db';
+import { hasPrice, PROVIDER_INFO, type ModelConfig, type ProviderConfig } from './providers';
 
 /**
- * Harga resmi DeepSeek per 1 juta token, tarif off-peak (USD).
- * Sumber: https://api-docs.deepseek.com/quick_start/pricing (diambil November 2026).
- * Jam peak = 2× harga ini.
- */
-export const PRICES: Record<ModelId, { hit: number; miss: number; out: number }> = {
-  'deepseek-flash': { hit: 0.003, miss: 0.15, out: 0.6 },
-  'deepseek-v4-pro': { hit: 0.022, miss: 0.66, out: 1.98 },
-};
-
-export const MODEL_LABEL: Record<ModelId, string> = {
-  'deepseek-flash': 'Flash',
-  'deepseek-v4-pro': 'Pro',
-};
-
-/**
- * Jam peak: 01:00–04:00 dan 06:00–10:00 UTC, Senin–Jumat
+ * Jam peak DeepSeek: 01:00–04:00 dan 06:00–10:00 UTC, Senin–Jumat
  * (= 08:00–11:00 dan 13:00–17:00 WIB). Hari libur Tiongkok tidak dihitung.
  */
 export function isPeak(date = new Date()): boolean {
@@ -26,8 +12,24 @@ export function isPeak(date = new Date()): boolean {
   return (h >= 1 && h < 4) || (h >= 6 && h < 10);
 }
 
-export function costUsd(model: ModelId, usage: Usage, peak: boolean): number {
-  const p = PRICES[model];
-  const base = (usage.hit * p.hit + usage.miss * p.miss + usage.out * p.out) / 1_000_000;
-  return peak ? base * 2 : base;
+/** Biaya dalam USD (harga Rupiah dikonversi dengan kurs di Pengaturan). null = harga model tidak diketahui. */
+export function costUsd(
+  provider: ProviderConfig,
+  model: ModelConfig,
+  usage: Usage,
+  peak: boolean,
+  usdToIdr: number,
+): number | null {
+  if (!hasPrice(model)) return null;
+  const p = model.price;
+  let cost = (usage.hit * p.cache + usage.miss * p.in + usage.out * p.out) / 1_000_000;
+  if (model.currency === 'IDR') cost = cost / usdToIdr;
+  if (peak && PROVIDER_INFO[provider.kind].peak) cost *= 2;
+  return cost;
+}
+
+export function formatPrice(model: ModelConfig): string {
+  if (!hasPrice(model)) return 'harga belum diisi';
+  const f = (n: number) => (model.currency === 'IDR' ? 'Rp' + n.toLocaleString('id-ID') : '$' + n);
+  return `${f(model.price.in)} / ${f(model.price.cache)} / ${f(model.price.out)} per 1 juta token (input / cache / output)`;
 }

@@ -1,13 +1,14 @@
 import { useSyncExternalStore } from 'react';
-import { db, type Attachment, type Chat, type ChatKind, type LengthPreset, type Message, type ModelId, type Version } from '../db';
+import { db, type Attachment, type Chat, type ChatKind, type LengthPreset, type Message, type Version } from '../db';
 import { buildContext, mergeSameRole, messageContent } from './context';
-import { ApiError, streamChat, type ApiMessage } from './deepseek';
+import { ApiError, streamChat, type ApiMessage } from './api';
 import { flushEditors } from './editors';
 import { cleanOutput, parseMarkdown, removeSegment, replaceSegment, segmentText, serializeBlocks } from './markdown';
 import { createChapter, createStory, getStoryPages, savePageDoc, trashChapter } from './pages';
 import { costUsd, isPeak } from './pricing';
 import { continueInstr, DISCUSS_INSTR, maxTokensFor, openingInstr } from './prompts';
-import { getSettings, markChanged, TEMPERATURE, type Settings } from './settings';
+import { findModel, PROVIDER_INFO, type ModelRef } from './providers';
+import { getSettings, markChanged, temperatureFor, type Settings } from './settings';
 import { countWords, firstWords, uid } from './util';
 
 /* ---------- Store status generasi (satu permintaan dalam satu waktu) ---------- */
@@ -99,7 +100,7 @@ export interface SendOptions {
   write: boolean;
   target: 'last' | 'new';
   length: LengthPreset;
-  model: ModelId;
+  model: ModelRef;
   thinking: boolean;
 }
 
@@ -128,7 +129,7 @@ function baseMessage(p: Partial<Message> & Pick<Message, 'chatId' | 'seq' | 'rol
     expectTitle: false,
     status: 'done',
     error: null,
-    model: 'deepseek-flash',
+    model: '',
     thinking: false,
     versions: [],
     active: 0,
@@ -140,7 +141,10 @@ function baseMessage(p: Partial<Message> & Pick<Message, 'chatId' | 'seq' | 'rol
 
 export async function sendMessage(o: SendOptions): Promise<SendResult> {
   const s = await getSettings();
-  if (!s.apiKey) throw new UserError('nokey', 'Masukkan API key DeepSeek dulu di Pengaturan.');
+  const resolved = findModel(s.providers, o.model);
+  if (!resolved || !resolved.provider.apiKey.trim()) {
+    throw new UserError('nokey', 'Pilih model dan isi API key penyedianya dulu di Pengaturan → Penyedia AI.');
+  }
   if (active) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
   await flushEditors();
 
@@ -231,7 +235,8 @@ export async function sendMessage(o: SendOptions): Promise<SendResult> {
     mode: write ? 'write' : 'discuss',
     targetPageId: writePageId,
     length,
-    model: o.model,
+    provider: o.model.provider,
+    model: o.model.model,
     thinking: o.thinking,
   });
   const asst = baseMessage({
@@ -244,7 +249,8 @@ export async function sendMessage(o: SendOptions): Promise<SendResult> {
     createdPageId,
     expectTitle,
     status: 'streaming',
-    model: o.model,
+    provider: o.model.provider,
+    model: o.model.model,
     thinking: o.thinking,
   });
   await db.messages.bulkAdd([user, asst]);
@@ -268,7 +274,8 @@ interface RunArgs {
 }
 
 async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs): Promise<void> {
-  const model = user.model;
+  const resolved = findModel(s.providers, { provider: user.provider ?? 'deepseek', model: user.model });
+  const usePrefix = kind === 'append' && !!resolved && PROVIDER_INFO[resolved.provider.kind].prefix;
   const thinking = kind === 'append' ? false : user.thinking;
   const peak = isPeak();
   const write = user.mode === 'write';
@@ -318,22 +325,40 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
   let status: Message['status'] = 'done';
   let error: string | null = null;
   try {
-    const ctx = await buildContext(chat, model, user.seq);
+    if (!resolved) {
+      throw new ApiError('notfound', `Model "${user.model}" tidak ada lagi di Pengaturan → Penyedia AI. Tambahkan lagi atau kirim ulang dengan model lain.`);
+    }
+    if (!resolved.provider.apiKey.trim()) {
+      throw new ApiError('auth', `API key ${resolved.provider.name} kosong. Isi di Pengaturan → Penyedia AI.`);
+    }
+    const vision = resolved.model.vision;
+    const ctx = await buildContext(chat, vision, user.seq);
     const omitted = { n: ctx.imagesOmitted };
     const messages: ApiMessage[] = mergeSameRole([
       ...ctx.messages,
-      { role: 'user', content: await messageContent(user, model, omitted) },
+      { role: 'user', content: await messageContent(user, vision, omitted) },
     ]);
-    if (kind === 'append' && prefixText) messages.push({ role: 'assistant', content: prefixText, prefix: true });
+    if (kind === 'append' && prefixText) {
+      if (usePrefix) messages.push({ role: 'assistant', content: prefixText, prefix: true });
+      else {
+        // Penyedia tanpa prefix completion: kirim teks terpotong sebagai jawaban, lalu minta disambung.
+        messages.push({ role: 'assistant', content: prefixText });
+        messages.push({
+          role: 'user',
+          content:
+            '[Instruksi aplikasi: MENULIS] Tulisanmu di atas terpotong. Sambung tepat dari kata terakhir tanpa mengulang teks yang sudah ada, tanpa komentar.',
+        });
+      }
+    }
     const r = await streamChat(
-      s.apiKey,
       {
-        model,
+        provider: resolved.provider,
+        model: resolved.model,
         messages,
         thinking,
-        temperature: TEMPERATURE[s.creativity],
+        temperature: temperatureFor(resolved.model, s.creativity),
         maxTokens: maxTokensFor(s, user.length ?? 'normal', thinking),
-        prefix: kind === 'append',
+        prefix: usePrefix,
       },
       onDelta,
       controller.signal,
@@ -355,7 +380,9 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
     }
   }
 
-  const cost = costUsd(model, usage, peak);
+  const c = resolved ? costUsd(resolved.provider, resolved.model, usage, peak, s.usdToIdr) : 0;
+  const cost = c ?? 0;
+  if (c === null && (usage.out > 0 || usage.miss > 0)) void db.messages.update(asst.id, { costUnknown: true });
   try {
     await finish({ chat, user, asst, kind, raw, usage, cost, status, error, prefixText });
   } finally {
@@ -403,7 +430,8 @@ async function finish(f: FinishArgs): Promise<void> {
 
   if (kind === 'append') {
     const prefix = f.prefixText ?? '';
-    const full = prefix + raw;
+    const needsSpace = prefix && raw && !/\s$/.test(prefix) && !/^[\s.,;:!?…)"”'’-]/.test(raw);
+    const full = prefix + (needsSpace ? ' ' : '') + raw;
     const versions = [...cur.versions];
     const v = versions[cur.active];
     const c = cleanOutput(full, cur.expectTitle, true);
@@ -517,7 +545,6 @@ async function captureEdits(asst: Message): Promise<Version[]> {
 
 export async function retryMessage(asstId: string, newText?: string): Promise<void> {
   const s = await getSettings();
-  if (!s.apiKey) throw new UserError('nokey', 'Masukkan API key DeepSeek dulu di Pengaturan.');
   if (active) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
   await flushEditors();
   const p = await pairOf(asstId);
@@ -553,7 +580,6 @@ export async function retryMessage(asstId: string, newText?: string): Promise<vo
 /** Lanjutkan balasan yang terputus/dihentikan dari kalimat terakhir (Chat Prefix Completion). */
 export async function continueMessage(asstId: string): Promise<void> {
   const s = await getSettings();
-  if (!s.apiKey) throw new UserError('nokey', 'Masukkan API key DeepSeek dulu di Pengaturan.');
   if (active) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
   await flushEditors();
   const p = await pairOf(asstId);

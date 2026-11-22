@@ -1,12 +1,13 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type ModelId } from '../db';
+import { db } from '../db';
+import { presetProviders, type ModelConfig, type ModelRef, type ProviderConfig } from './providers';
 
 export type Creativity = 'stable' | 'normal' | 'wild';
 
 export interface Settings {
-  apiKey: string;
+  providers: ProviderConfig[];
+  defaultModel: ModelRef;
   onboarded: boolean;
-  model: ModelId;
   thinking: boolean;
   creativity: Creativity;
   openingMin: number;
@@ -25,10 +26,9 @@ export interface Settings {
   lastBackupAt: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = {
-  apiKey: '',
+const DEFAULT_SETTINGS: Omit<Settings, 'providers'> = {
+  defaultModel: { provider: 'deepseek', model: 'deepseek-flash' },
   onboarded: false,
-  model: 'deepseek-flash',
   thinking: false,
   creativity: 'normal',
   openingMin: 2000,
@@ -47,12 +47,17 @@ export const DEFAULT_SETTINGS: Settings = {
   lastBackupAt: 0,
 };
 
-/** Temperature per tingkat kreativitas. DeepSeek merekomendasikan 1.5 untuk penulisan kreatif. */
-export const TEMPERATURE: Record<Creativity, number> = {
-  stable: 1.2,
-  normal: 1.5,
-  wild: 1.7,
-};
+/**
+ * Temperature per tingkat kreativitas. DeepSeek merekomendasikan 1.5 untuk penulisan kreatif;
+ * model lain (Claude, GPT, Laguna) memakai skala lebih rendah, dan sebagian menolak nilai di atas 1.
+ */
+export function temperatureFor(model: ModelConfig, c: Creativity): number {
+  const deepseek = /deepseek/i.test(model.id);
+  const scale: Record<Creativity, number> = deepseek
+    ? { stable: 1.2, normal: 1.5, wild: 1.7 }
+    : { stable: 0.6, normal: 0.85, wild: 1.0 };
+  return scale[c];
+}
 
 export const CREATIVITY_LABEL: Record<Creativity, string> = {
   stable: 'Stabil',
@@ -60,15 +65,25 @@ export const CREATIVITY_LABEL: Record<Creativity, string> = {
   wild: 'Liar',
 };
 
+type StoredSettings = Partial<Settings> & { apiKey?: string; model?: string };
+
 export async function getSettings(): Promise<Settings> {
   const row = await db.kv.get('settings');
-  return { ...DEFAULT_SETTINGS, ...((row?.value as Partial<Settings>) ?? {}) };
+  const raw = (row?.value as StoredSettings) ?? {};
+  const { apiKey: legacyKey, model: legacyModel, ...rest } = raw;
+  const merged: Settings = { ...DEFAULT_SETTINGS, providers: presetProviders(), ...rest };
+  if (!raw.providers) {
+    // Data versi pertama: satu API key DeepSeek dan satu pilihan model.
+    merged.providers = presetProviders().map((p) => (p.id === 'deepseek' ? { ...p, apiKey: legacyKey ?? '' } : p));
+    if (legacyModel) merged.defaultModel = { provider: 'deepseek', model: legacyModel };
+  }
+  return merged;
 }
 
 export async function updateSettings(patch: Partial<Settings>): Promise<void> {
   await db.transaction('rw', db.kv, async () => {
     const cur = await getSettings();
-    await db.kv.put({ key: 'settings', value: { ...cur, ...patch } });
+    await db.kv.put({ key: 'settings', value: { ...cur, ...patch } satisfies Settings });
   });
 }
 
@@ -87,4 +102,20 @@ export function markChanged() {
 export async function getLastChangeAt(): Promise<number> {
   const row = await db.kv.get('lastChangeAt');
   return (row?.value as number) ?? 0;
+}
+
+export async function updateProvider(id: string, fn: (p: ProviderConfig) => ProviderConfig | null): Promise<void> {
+  await db.transaction('rw', db.kv, async () => {
+    const cur = await getSettings();
+    const providers = cur.providers.flatMap((p) => {
+      if (p.id !== id) return [p];
+      const next = fn(p);
+      return next ? [next] : [];
+    });
+    await db.kv.put({ key: 'settings', value: { ...cur, providers } satisfies Settings });
+  });
+}
+
+export function hasAnyKey(s: Settings): boolean {
+  return s.providers.some((p) => p.apiKey.trim() && p.models.length);
 }

@@ -1,5 +1,5 @@
-import { db, type Chat, type Message, type ModelId } from '../db';
-import type { ApiMessage, ContentPart } from './deepseek';
+import { db, type Chat, type Message } from '../db';
+import type { ApiMessage, ContentPart } from './api';
 import { groupSegments, serializeBlocks, docBlocks } from './markdown';
 import { getStoryPages, displayTitle } from './pages';
 import { SYSTEM_DISCUSS, SYSTEM_MAIN } from './prompts';
@@ -14,14 +14,14 @@ export interface BuiltContext {
   imagesOmitted: number;
 }
 
-export async function messageContent(m: Message, model: ModelId, omitted: { n: number }): Promise<string | ContentPart[]> {
+export async function messageContent(m: Message, vision: boolean, omitted: { n: number }): Promise<string | ContentPart[]> {
   const text = composeUser(m);
   if (!m.attachmentIds.length) return text;
   const parts: ContentPart[] = [{ type: 'text', text }];
   for (const id of m.attachmentIds) {
     const a = await db.attachments.get(id);
     if (!a || a.kind !== 'image' || !a.blob) continue;
-    if (model !== 'deepseek-flash') {
+    if (!vision) {
       omitted.n++;
       continue;
     }
@@ -61,7 +61,7 @@ interface Unit {
  *
  * `beforeSeq`: hanya pesan dengan seq < beforeSeq yang dipakai.
  */
-export async function buildMainContext(chat: Chat, model: ModelId, beforeSeq = Infinity): Promise<BuiltContext> {
+export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = Infinity): Promise<BuiltContext> {
   const all = await db.messages.where('chatId').equals(chat.id).sortBy('seq');
   const msgs = all.filter((m) => m.seq < beforeSeq);
   const pages = chat.pageId ? await getStoryPages(chat.pageId) : [];
@@ -107,7 +107,7 @@ export async function buildMainContext(chat: Chat, model: ModelId, beforeSeq = I
       units.push({
         key: [seg.page, seg.first, u.seq],
         msgs: [
-          { role: 'user', content: await messageContent(u, model, omitted) },
+          { role: 'user', content: await messageContent(u, vision, omitted) },
           { role: 'assistant', content },
         ],
       });
@@ -116,7 +116,7 @@ export async function buildMainContext(chat: Chat, model: ModelId, beforeSeq = I
       units.push({
         key: [lastKey[0], lastKey[1], u.seq],
         msgs: [
-          { role: 'user', content: await messageContent(u, model, omitted) },
+          { role: 'user', content: await messageContent(u, vision, omitted) },
           { role: 'assistant', content: a.text },
         ],
       });
@@ -129,7 +129,7 @@ export async function buildMainContext(chat: Chat, model: ModelId, beforeSeq = I
 }
 
 /** Konteks chat diskusi: brief + seluruh naskah di awal, lalu percakapan. */
-export async function buildDiscussContext(chat: Chat, model: ModelId, beforeSeq = Infinity): Promise<BuiltContext> {
+export async function buildDiscussContext(chat: Chat, vision: boolean, beforeSeq = Infinity): Promise<BuiltContext> {
   const omitted = { n: 0 };
   const head: ApiMessage[] = [{ role: 'system', content: SYSTEM_DISCUSS }];
   if (chat.pageId) {
@@ -150,7 +150,7 @@ export async function buildDiscussContext(chat: Chat, model: ModelId, beforeSeq 
       .join('\n\n');
     const intro = `[Brief cerita dari penulis]\n\n${briefMsg ? [briefMsg.text, briefMsg.attachText].filter(Boolean).join('\n\n') : '(tidak ada brief)'}\n\n[Naskah cerita saat ini]\n\n${naskah}`;
     if (briefMsg && briefMsg.attachmentIds.length) {
-      const content = await messageContent({ ...briefMsg, text: intro, attachText: '', instr: '' }, model, omitted);
+      const content = await messageContent({ ...briefMsg, text: intro, attachText: '', instr: '' }, vision, omitted);
       head.push({ role: 'user', content });
     } else head.push({ role: 'user', content: intro });
   }
@@ -158,15 +158,15 @@ export async function buildDiscussContext(chat: Chat, model: ModelId, beforeSeq 
   const rest: ApiMessage[] = [];
   for (const m of all) {
     if (m.seq >= beforeSeq || m.status === 'canceled') continue;
-    if (m.role === 'user') rest.push({ role: 'user', content: await messageContent(m, model, omitted) });
+    if (m.role === 'user') rest.push({ role: 'user', content: await messageContent(m, vision, omitted) });
     else if (m.text.trim()) rest.push({ role: 'assistant', content: m.text });
   }
   // Pastikan tidak ada pesan user tanpa balasan di tengah (gagal) yang membingungkan.
   return { messages: mergeSameRole([...head, ...rest]), imagesOmitted: omitted.n };
 }
 
-export async function buildContext(chat: Chat, model: ModelId, beforeSeq = Infinity): Promise<BuiltContext> {
-  return chat.kind === 'discuss' ? buildDiscussContext(chat, model, beforeSeq) : buildMainContext(chat, model, beforeSeq);
+export async function buildContext(chat: Chat, vision: boolean, beforeSeq = Infinity): Promise<BuiltContext> {
+  return chat.kind === 'discuss' ? buildDiscussContext(chat, vision, beforeSeq) : buildMainContext(chat, vision, beforeSeq);
 }
 
 /** Pesan pertama pengguna di chat utama = brief. */

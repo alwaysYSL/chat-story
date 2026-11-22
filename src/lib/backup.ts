@@ -25,8 +25,10 @@ export async function createBackup(): Promise<Blob> {
     atts.map(async (a) => ({ ...a, blob: a.blob ? await blobToDataUrl(a.blob) : null })),
   );
   // API key sengaja tidak ikut dibackup.
-  const { apiKey: _omit, ...safeSettings } = settings;
-  void _omit;
+  const safeSettings: Partial<Settings> = {
+    ...settings,
+    providers: settings.providers.map((p) => ({ ...p, apiKey: '' })),
+  };
   const file: BackupFile = {
     app: 'chat-story',
     schema: SCHEMA_VERSION,
@@ -71,7 +73,7 @@ export async function restoreBackup(file: File, mode: 'merge' | 'replace'): Prom
   const attachments: Attachment[] = await Promise.all(
     data.attachments.map(async (a) => ({ ...a, blob: a.blob ? await dataUrlToBlob(a.blob) : null })),
   );
-  const keepKey = (await getSettings()).apiKey;
+  const keys = new Map((await getSettings()).providers.map((p) => [p.id, p.apiKey]));
   await db.transaction('rw', [db.pages, db.chats, db.messages, db.attachments, db.kv], async () => {
     if (mode === 'replace') {
       await Promise.all([db.pages.clear(), db.chats.clear(), db.messages.clear(), db.attachments.clear()]);
@@ -82,7 +84,12 @@ export async function restoreBackup(file: File, mode: 'merge' | 'replace'): Prom
     await db.attachments.bulkPut(attachments);
     if (mode === 'replace') {
       const cur = await getSettings();
-      await db.kv.put({ key: 'settings', value: { ...cur, ...data.settings, apiKey: keepKey, onboarded: true } });
+      const restored = { ...cur, ...data.settings, onboarded: true } as Settings;
+      // Backup versi pertama tidak punya daftar penyedia; pakai yang sekarang.
+      if (!data.settings.providers) restored.providers = cur.providers;
+      restored.providers = restored.providers.map((p) => ({ ...p, apiKey: keys.get(p.id) ?? '' }));
+      delete (restored as Partial<Settings> & { apiKey?: string }).apiKey;
+      await db.kv.put({ key: 'settings', value: restored });
     }
   });
   return { pages: data.pages.length, chats: data.chats.length };
