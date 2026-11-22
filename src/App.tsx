@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ToastHost } from './components/ui';
+import { UpdateBanner } from './components/UpdateBanner';
 import { recoverInterrupted } from './lib/generate';
 import { purgeTrash } from './lib/pages';
 import { useSettings } from './lib/settings';
@@ -66,6 +67,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Gate>
+      <UpdateBanner />
       <ToastHost />
     </HashRouter>
   );

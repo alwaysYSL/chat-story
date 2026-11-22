@@ -46,8 +46,10 @@ export default defineConfig({
     react(),
     cspPlugin(),
     VitePWA({
-      registerType: 'autoUpdate',
-      injectRegister: 'script',
+      // 'prompt': versi baru menunggu sampai pengguna menekan "Perbarui" (lihat UpdateBanner),
+      // supaya tulisan AI yang sedang berjalan tidak terputus oleh muat ulang otomatis.
+      registerType: 'prompt',
+      injectRegister: false,
       includeAssets: ['icon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'Chat Story',
