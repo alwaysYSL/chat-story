@@ -112,12 +112,26 @@ function thinkingParams(model: ModelConfig, thinking: boolean): Record<string, u
   }
 }
 
+/**
+ * Model yang menolak mode berpikir dimatikan (mis. sebagian model OpenRouter: "Reasoning is mandatory").
+ * Diingat selama aplikasi terbuka supaya permintaan berikutnya langsung benar.
+ */
+const reasoningRequired = new Set<string>();
+const REASONING_REQUIRED_RE = /(reason|think)[\s\S]*(mandatory|cannot be disabled|can ?not be turned off|required|must be enabled)/i;
+/** Token tambahan untuk model yang tetap berpikir walaupun mode berpikir mati. */
+const FORCED_REASONING_TOKENS = 16000;
+
+function modelKey(req: Pick<ChatRequest, 'provider' | 'model'>) {
+  return `${req.provider.id}::${req.model.id}`;
+}
+
 export function buildBody(req: ChatRequest, stream: boolean): Record<string, unknown> {
+  const forced = !req.thinking && reasoningRequired.has(modelKey(req));
   const body: Record<string, unknown> = {
     model: req.model.id,
     messages: req.messages,
-    max_tokens: req.maxTokens,
-    ...thinkingParams(req.model, req.thinking),
+    max_tokens: forced ? req.maxTokens + FORCED_REASONING_TOKENS : req.maxTokens,
+    ...(forced ? {} : thinkingParams(req.model, req.thinking)),
   };
   if (stream) {
     body.stream = true;
@@ -136,22 +150,29 @@ export async function streamChat(
   const name = req.provider.name;
   if (!navigator.onLine) throw new ApiError('offline', 'Tidak ada koneksi internet.');
 
-  let res: Response;
-  try {
-    res = await fetch(chatUrl(req.provider, req.prefix), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${req.provider.apiKey.trim()}` },
-      body: JSON.stringify(buildBody(req, true)),
-      signal,
-    });
-  } catch (e) {
-    if ((e as Error).name === 'AbortError') throw new ApiError('aborted', 'Dihentikan.');
-    throw new ApiError(
-      navigator.onLine ? 'interrupted' : 'offline',
-      navigator.onLine
-        ? `Tidak bisa terhubung ke ${name}. Periksa koneksi internet dan base URL di Pengaturan.`
-        : 'Tidak ada koneksi internet.',
-    );
+  const send = async (): Promise<Response> => {
+    try {
+      return await fetch(chatUrl(req.provider, req.prefix), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${req.provider.apiKey.trim()}` },
+        body: JSON.stringify(buildBody(req, true)),
+        signal,
+      });
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') throw new ApiError('aborted', 'Dihentikan.');
+      throw new ApiError(
+        navigator.onLine ? 'interrupted' : 'offline',
+        navigator.onLine
+          ? `Tidak bisa terhubung ke ${name}. Periksa koneksi internet dan base URL di Pengaturan.`
+          : 'Tidak ada koneksi internet.',
+      );
+    }
+  };
+  let res = await send();
+  if (!res.ok) {
+    const detail = await readError(res);
+    if (needsReasoning(req, res.status, detail)) res = await send();
+    else throw errorFromStatus(res.status, detail, name);
   }
   if (!res.ok || !res.body) throw errorFromStatus(res.status, await readError(res), name);
 
@@ -224,6 +245,15 @@ export async function streamChat(
   return { content, usage, finishReason };
 }
 
+/** Kalau model menolak mode berpikir dimatikan, ingat dan kembalikan true supaya permintaan diulang. */
+function needsReasoning(req: Pick<ChatRequest, 'provider' | 'model' | 'thinking'>, status: number, detail: string): boolean {
+  const key = modelKey(req);
+  if (req.thinking || reasoningRequired.has(key)) return false;
+  if ((status !== 400 && status !== 422) || !REASONING_REQUIRED_RE.test(detail)) return false;
+  reasoningRequired.add(key);
+  return true;
+}
+
 export interface TestResult {
   ok: true;
   text: string;
@@ -253,23 +283,33 @@ export async function testProvider(provider: ProviderConfig, model?: ModelConfig
   }
   const m = model ?? provider.models[0];
   if (!m) throw new ApiError('invalid', 'Tambahkan minimal satu model dulu.');
-  let res: Response;
-  try {
-    res = await fetch(chatUrl(provider), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify(
-        buildBody(
-          { provider, model: m, messages: [{ role: 'user', content: 'Balas dengan satu kata: halo' }], thinking: false, temperature: 0.5, maxTokens: 16 },
-          false,
-        ),
-      ),
-    });
-  } catch {
-    throw new ApiError(
-      'offline',
-      `Tidak bisa terhubung ke ${name}. Periksa koneksi internet dan base URL. Sebagian penyedia juga tidak mengizinkan aplikasi web memanggilnya langsung.`,
-    );
+  const req: ChatRequest = {
+    provider,
+    model: m,
+    messages: [{ role: 'user', content: 'Balas dengan satu kata: halo' }],
+    thinking: false,
+    temperature: 0.5,
+    maxTokens: 16,
+  };
+  const send = async () => {
+    try {
+      return await fetch(chatUrl(provider), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify(buildBody(req, false)),
+      });
+    } catch {
+      throw new ApiError(
+        'offline',
+        `Tidak bisa terhubung ke ${name}. Periksa koneksi internet dan base URL. Sebagian penyedia juga tidak mengizinkan aplikasi web memanggilnya langsung.`,
+      );
+    }
+  };
+  let res = await send();
+  if (!res.ok) {
+    const detail = await readError(res);
+    if (needsReasoning(req, res.status, detail)) res = await send();
+    else throw errorFromStatus(res.status, detail, name);
   }
   if (!res.ok) throw errorFromStatus(res.status, await readError(res), name);
   return { ok: true, text: `Terhubung ke ${name} dengan model ${m.label}. Cek saldo di situs ${name}.` };
