@@ -22,6 +22,8 @@ export interface ModelConfig {
   thinking: ThinkingStyle;
   currency: 'USD' | 'IDR';
   price: ModelPrice;
+  /** batas konteks dalam token; 0/undefined = tidak diketahui */
+  context?: number;
 }
 
 export interface ProviderConfig {
@@ -95,6 +97,7 @@ const DS = (id: string, label: string, vision: boolean, price: ModelPrice): Mode
   thinking: 'deepseek',
   currency: 'USD',
   price,
+  context: 1_000_000,
 });
 
 /**
@@ -141,6 +144,7 @@ export function presetProviders(): ProviderConfig[] {
           thinking: 'poolside',
           currency: 'USD',
           price: { in: 0, cache: 0, out: 0 },
+          context: 1_000_000,
         },
       ],
     },
@@ -210,4 +214,21 @@ export function isValidBaseUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Lengkapi data model lama dengan nilai bawaan yang belum ada (mis. batas konteks). */
+export function withPresetDefaults(providers: ProviderConfig[]): ProviderConfig[] {
+  const presets = new Map(presetProviders().flatMap((p) => p.models.map((m) => [`${p.id}::${m.id}`, m] as const)));
+  return providers.map((p) => ({
+    ...p,
+    models: p.models.map((m) => {
+      const pre = presets.get(`${p.id}::${m.id}`);
+      return m.context === undefined && pre?.context ? { ...m, context: pre.context } : m;
+    }),
+  }));
+}
+
+/** Perkiraan kasar jumlah token dari teks (bahasa Indonesia ±3,5 karakter per token). */
+export function estimateTokens(chars: number, images = 0): number {
+  return Math.round(chars / 3.5) + images * 1024;
 }

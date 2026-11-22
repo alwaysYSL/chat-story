@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { presetProviders, type ModelConfig, type ModelRef, type ProviderConfig } from './providers';
+import { presetProviders, withPresetDefaults, type ModelConfig, type ModelRef, type ProviderConfig } from './providers';
 
 export type Creativity = 'stable' | 'normal' | 'wild';
 
@@ -77,6 +77,7 @@ export async function getSettings(): Promise<Settings> {
     merged.providers = presetProviders().map((p) => (p.id === 'deepseek' ? { ...p, apiKey: legacyKey ?? '' } : p));
     if (legacyModel) merged.defaultModel = { provider: 'deepseek', model: legacyModel };
   }
+  merged.providers = withPresetDefaults(merged.providers);
   return merged;
 }
 

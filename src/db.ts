@@ -34,6 +34,11 @@ export interface Chat {
   /** id page cerita (induk) yang terhubung */
   pageId: string | null;
   draft: string;
+  /**
+   * Pengingat aturan yang ditempel di akhir setiap permintaan menulis.
+   * undefined = otomatis diambil dari bagian "aturan lanjutan" di brief; '' = dimatikan.
+   */
+  reminder?: string;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -90,6 +95,8 @@ export interface Message {
   costUsd: number;
   /** ada permintaan yang harganya tidak diketahui (harga model belum diisi) */
   costUnknown?: boolean;
+  /** pasangan diskusi ini tidak dikirim lagi ke AI */
+  excluded?: boolean;
   createdAt: number;
 }
 

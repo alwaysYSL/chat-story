@@ -28,6 +28,7 @@ export function ModelPicker({
   thinking,
   onThinking,
   peak,
+  contextTokens = 0,
 }: {
   open: boolean;
   onClose: () => void;
@@ -37,6 +38,8 @@ export function ModelPicker({
   thinking?: boolean;
   onThinking?: (v: boolean) => void;
   peak?: boolean;
+  /** perkiraan ukuran konteks cerita (token); 0 = tidak ditampilkan */
+  contextTokens?: number;
 }) {
   const s = useSettings();
   const nav = useNavigate();
@@ -59,18 +62,29 @@ export function ModelPicker({
         </div>
       )}
       {peak && <p className="note pad warn-text">Sekarang jam peak DeepSeek: harga DeepSeek 2×.</p>}
+      {contextTokens > 0 && (
+        <p className="note pad">Perkiraan konteks cerita ini: ±{kTok(contextTokens)} token per permintaan.</p>
+      )}
       {list.length === 0 && <p className="note pad">Belum ada penyedia dengan API key. Isi dulu di Pengaturan.</p>}
       {[...groups.values()].map((items) => (
         <div key={items[0].provider.id}>
           <div className="sheet-group">{items[0].provider.name}</div>
           {items.map(({ provider, model }) => {
             const active = value.provider === provider.id && value.model === model.id;
+            const tooSmall = !!model.context && contextTokens > model.context * 0.85;
             return (
               <SheetItem
                 key={model.id}
                 icon={active ? <IconCheck /> : <span />}
                 label={model.label}
-                hint={[model.id, model.vision ? 'bisa baca gambar' : 'teks saja'].join(' · ')}
+                hint={[
+                  model.id,
+                  model.vision ? 'bisa baca gambar' : 'teks saja',
+                  model.context ? `konteks ${kTok(model.context)}` : '',
+                  tooSmall ? '⚠ terlalu kecil untuk cerita ini' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
                 onClick={() => {
                   onPick({ provider: provider.id, model: model.id });
                   onClose();
@@ -90,6 +104,11 @@ export function ModelPicker({
       />
     </Sheet>
   );
+}
+
+function kTok(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toLocaleString('id-ID', { maximumFractionDigits: 1 })} juta`;
+  return `${Math.max(1, Math.round(n / 1000)).toLocaleString('id-ID')} ribu`;
 }
 
 /* ---------- Daftar penyedia (di Pengaturan) ---------- */
@@ -233,6 +252,8 @@ function ModelEditor({
         <DecimalField label="Input dari cache" value={m.price.cache} onChange={(n) => set({ price: { ...m.price, cache: n } })} />
         <DecimalField label="Output" value={m.price.out} onChange={(n) => set({ price: { ...m.price, out: n } })} />
         <p className="note">Kosongkan semua kalau harga tidak diketahui; biaya tidak ditampilkan untuk model ini.</p>
+        <DecimalField label="Batas konteks (ribu token)" value={m.context ? m.context / 1000 : 0} onChange={(n) => set({ context: Math.round(n * 1000) })} />
+        <p className="note">Lihat di dokumentasi penyedia, mis. 128 untuk 128K. Dipakai untuk peringatan saat cerita mendekati batas. Kosongkan kalau tidak tahu.</p>
         <div className="row-buttons">
           {onDelete && (
             <button

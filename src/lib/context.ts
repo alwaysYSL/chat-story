@@ -2,7 +2,7 @@ import { db, type Chat, type Message } from '../db';
 import type { ApiMessage, ContentPart } from './api';
 import { groupSegments, serializeBlocks, docBlocks } from './markdown';
 import { getStoryPages, displayTitle } from './pages';
-import { SYSTEM_DISCUSS, SYSTEM_MAIN } from './prompts';
+import { chapterMarker, SYSTEM_DISCUSS, SYSTEM_MAIN } from './prompts';
 import { blobToDataUrl } from './util';
 
 export function composeUser(m: Pick<Message, 'text' | 'attachText' | 'instr'>): string {
@@ -54,16 +54,30 @@ interface Unit {
 }
 
 /**
+ * Brief = pesan pertama yang dikirim dalam mode tulis (yang tidak dibatalkan).
+ * Pesan diskusi sebelum cerita dimulai tidak dihitung sebagai brief.
+ */
+export function findBrief(list: Message[]): Message | undefined {
+  const writes = list.filter((m) => m.role === 'user' && m.mode === 'write');
+  return writes.find((m) => m.status !== 'canceled') ?? writes[0];
+}
+
+/**
  * Susun konteks chat utama/bebas:
- * system → (giliran user/assistant sesuai urutan bab) → …
- * Balasan AI diambil dari isi naskah terbaru; kalau belum diedit, teks mentah model dipakai
- * supaya awalan permintaan identik dan kena cache.
+ * system → brief → (giliran user/assistant sesuai urutan bab, dengan penanda awal tiap bab) → …
+ *
+ * - Brief SELALU dikirim, walaupun pembukaannya sudah dihapus dari naskah.
+ * - Balasan AI diambil dari isi naskah terbaru; kalau belum diedit, teks mentah model dipakai
+ *   supaya awalan permintaan identik dan kena cache.
+ * - Pasangan tulis yang balasannya sudah tidak ada di naskah dilewati.
+ * - Pasangan diskusi yang dikeluarkan pengguna (excluded) dilewati.
  *
  * `beforeSeq`: hanya pesan dengan seq < beforeSeq yang dipakai.
  */
 export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = Infinity): Promise<BuiltContext> {
   const all = await db.messages.where('chatId').equals(chat.id).sortBy('seq');
   const msgs = all.filter((m) => m.seq < beforeSeq);
+  const brief = findBrief(all);
   const pages = chat.pageId ? await getStoryPages(chat.pageId) : [];
   const pageIdx = new Map(pages.map((p, i) => [p.id, i]));
   const groups = pages.map((p) => groupSegments(p.doc));
@@ -78,11 +92,13 @@ export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = 
   const omitted = { n: 0 };
   const units: Unit[] = [];
   let lastKey: [number, number] = [-1, -1];
+  const pagesWithContent = new Set<number>();
 
   // Teks manual sebelum segmen AI pertama di setiap page.
   groups.forEach((g, pi) => {
     const text = serializeBlocks(g.leading);
     if (!text.trim()) return;
+    pagesWithContent.add(pi);
     const label = pi === 0 ? 'Naskah awal' : `Bab "${displayTitle(pages[pi])}"`;
     units.push({
       key: [pi, -1, -1],
@@ -94,6 +110,27 @@ export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = 
     const u = msgs[i];
     if (u.role !== 'user') continue;
     const a = msgs[i + 1]?.role === 'assistant' ? msgs[i + 1] : undefined;
+    const isBrief = u.id === brief?.id;
+
+    if (isBrief) {
+      // Brief selalu di paling awal. Balasannya (pembukaan) diletakkan sesuai posisinya di naskah.
+      const seg = a && a.status !== 'canceled' ? segIndex.get(a.id) : undefined;
+      const usable = seg && (!a!.targetPageId || pageIdx.has(a!.targetPageId));
+      units.push({
+        // Sebelum seluruh naskah; diskusi yang terjadi sebelum brief tetap di depannya.
+        key: [-1, -1, u.seq],
+        // Instruksi pembukaan hanya relevan kalau pembukaannya masih ada.
+        msgs: [{ role: 'user', content: await messageContent(usable ? u : { ...u, instr: '' }, vision, omitted) }],
+      });
+      if (usable && seg && a) {
+        const v = a.versions[a.active];
+        lastKey = [seg.page, seg.first];
+        pagesWithContent.add(seg.page);
+        units.push({ key: [seg.page, seg.first, u.seq], msgs: [{ role: 'assistant', content: v && v.ser === seg.text ? v.raw : seg.text }] });
+      }
+      continue;
+    }
+
     if (u.status === 'canceled' || a?.status === 'canceled') continue;
     if (!a) continue;
 
@@ -104,6 +141,7 @@ export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = 
       const v = a.versions[a.active];
       const content = v && v.ser === seg.text ? v.raw : seg.text;
       lastKey = [seg.page, seg.first];
+      pagesWithContent.add(seg.page);
       units.push({
         key: [seg.page, seg.first, u.seq],
         msgs: [
@@ -112,7 +150,7 @@ export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = 
         ],
       });
     } else {
-      if (!a.text.trim()) continue;
+      if (u.excluded || a.excluded || !a.text.trim()) continue;
       units.push({
         key: [lastKey[0], lastKey[1], u.seq],
         msgs: [
@@ -121,6 +159,12 @@ export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = 
         ],
       });
     }
+  }
+
+  // Penanda awal setiap bab yang punya isi, supaya AI tahu batas dan judul bab.
+  for (const pi of pagesWithContent) {
+    if (pi === 0) continue;
+    units.push({ key: [pi, -2, -2], msgs: [{ role: 'user', content: chapterMarker(displayTitle(pages[pi])) }] });
   }
 
   units.sort((x, y) => x.key[0] - y.key[0] || x.key[1] - y.key[1] || x.key[2] - y.key[2]);
@@ -139,8 +183,7 @@ export async function buildDiscussContext(chat: Chat, vision: boolean, beforeSeq
     );
     let briefMsg: Message | undefined;
     if (main) {
-      const mm = await db.messages.where('chatId').equals(main.id).sortBy('seq');
-      briefMsg = mm.find((m) => m.role === 'user');
+      briefMsg = findBrief(await db.messages.where('chatId').equals(main.id).sortBy('seq'));
     }
     const naskah = pages
       .map((p, i) => {
@@ -157,7 +200,7 @@ export async function buildDiscussContext(chat: Chat, vision: boolean, beforeSeq
   const all = await db.messages.where('chatId').equals(chat.id).sortBy('seq');
   const rest: ApiMessage[] = [];
   for (const m of all) {
-    if (m.seq >= beforeSeq || m.status === 'canceled') continue;
+    if (m.seq >= beforeSeq || m.status === 'canceled' || m.excluded) continue;
     if (m.role === 'user') rest.push({ role: 'user', content: await messageContent(m, vision, omitted) });
     else if (m.text.trim()) rest.push({ role: 'assistant', content: m.text });
   }
@@ -169,8 +212,7 @@ export async function buildContext(chat: Chat, vision: boolean, beforeSeq = Infi
   return chat.kind === 'discuss' ? buildDiscussContext(chat, vision, beforeSeq) : buildMainContext(chat, vision, beforeSeq);
 }
 
-/** Pesan pertama pengguna di chat utama = brief. */
+/** Brief chat utama (pesan tulis pertama). */
 export async function getBrief(chatId: string): Promise<Message | undefined> {
-  const mm = await db.messages.where('chatId').equals(chatId).sortBy('seq');
-  return mm.find((m) => m.role === 'user');
+  return findBrief(await db.messages.where('chatId').equals(chatId).sortBy('seq'));
 }
