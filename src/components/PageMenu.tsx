@@ -52,7 +52,7 @@ export function ExportSheet({ page, open, onClose }: { page: Page; open: boolean
           const md = await storyMarkdown(rootId);
           const blob = new Blob([md], { type: 'text/markdown' });
           const name = fileName(displayTitle(root)) + '.md';
-          if ((await shareFile(name, blob, displayTitle(root))) === 'unsupported') downloadFile(name, blob);
+          if ((await shareFile(name, blob, displayTitle(root))) === 'unsupported') await downloadFile(name, blob);
           onClose();
         }}
       />
@@ -62,7 +62,7 @@ export function ExportSheet({ page, open, onClose }: { page: Page; open: boolean
         onClick={async () => {
           const root = await db.pages.get(rootId);
           const md = await storyMarkdown(rootId);
-          downloadFile(fileName(displayTitle(root)) + '.txt', new Blob([md], { type: 'text/plain' }));
+          toast('Disimpan di ' + (await downloadFile(fileName(displayTitle(root)) + '.txt', new Blob([md], { type: 'text/plain' }))));
           onClose();
         }}
       />

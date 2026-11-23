@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { createPortal } from 'react-dom';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { IconChat, IconEdit, IconHome, IconSearch, IconSparkle } from './Icons';
+import { backStack, isNative } from '../lib/native';
 import { createStory } from '../lib/pages';
 
 /* ---------- Toast ---------- */
@@ -59,7 +60,18 @@ export function Sheet({
   useEffect(() => {
     if (!open) return;
     // Tombol back Android (dan Esc) menutup sheet paling atas dulu, bukan meninggalkan halaman.
-    // CloseWatcher didukung Chrome Android; tanpa itu, cukup Esc.
+    // APK: lewat tumpukan backStack (lihat lib/native.ts). PWA: CloseWatcher Chrome Android; tanpa itu, cukup Esc.
+    if (isNative()) {
+      const close = () => closeRef.current();
+      backStack.push(close);
+      const onKey = (e: KeyboardEvent) => e.key === 'Escape' && backStack[backStack.length - 1] === close && close();
+      window.addEventListener('keydown', onKey);
+      return () => {
+        const i = backStack.lastIndexOf(close);
+        if (i >= 0) backStack.splice(i, 1);
+        window.removeEventListener('keydown', onKey);
+      };
+    }
     const CW = (window as unknown as { CloseWatcher?: new () => CloseWatcherLike }).CloseWatcher;
     if (CW) {
       let watcher: CloseWatcherLike | null = null;

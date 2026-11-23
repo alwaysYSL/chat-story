@@ -1,0 +1,93 @@
+name: Android APK
+
+# Membangun APK Chat Story.
+# - Pull request: APK uji, bisa diunduh dari tab Actions → artifact.
+# - Push ke main: APK rilis yang ditandatangani, dipublikasikan di Releases (v<versi package.json>).
+#   Butuh secret APK_KEY_PASSWORD (password untuk android/keystore.p12.enc).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - name: Build web untuk Android
+        run: npm run build:android
+      - run: npx cap sync android
+
+      - name: Versi
+        id: ver
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          CODE=$(node -p "const [a,b,c]=require('./package.json').version.split(/[.-]/).map(Number);a*10000+b*100+(c||0)")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Siapkan kunci tanda tangan
+        id: key
+        env:
+          APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
+        run: |
+          if [ -z "$APK_KEY_PASSWORD" ]; then
+            echo "::warning::Secret APK_KEY_PASSWORD belum diisi. APK dibuat sebagai versi uji (debug), tidak bisa dipakai untuk update."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node scripts/keystore.mjs decrypt android/keystore.p12.enc "$RUNNER_TEMP/chatstory.p12"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        working-directory: android
+        env:
+          CHATSTORY_KEYSTORE: ${{ steps.key.outputs.signed == 'true' && format('{0}/chatstory.p12', runner.temp) || '' }}
+          CHATSTORY_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          TASK=${{ steps.key.outputs.signed == 'true' && 'assembleRelease' || 'assembleDebug' }}
+          ./gradlew --no-daemon $TASK -PappVersionName=${{ steps.ver.outputs.version }} -PappVersionCode=${{ steps.ver.outputs.code }}
+          mkdir -p ../out
+          if [ "${{ steps.key.outputs.signed }}" = "true" ]; then
+            cp app/build/outputs/apk/release/app-release.apk ../out/chat-story-${{ steps.ver.outputs.version }}.apk
+          else
+            cp app/build/outputs/apk/debug/app-debug.apk ../out/chat-story-${{ steps.ver.outputs.version }}-uji.apk
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chat-story-apk
+          path: out/*.apk
+          retention-days: 14
+
+      - name: Rilis
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.key.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=v${{ steps.ver.outputs.version }}
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Rilis $TAG sudah ada; naikkan versi di package.json untuk rilis baru."
+          else
+            gh release create "$TAG" out/*.apk --title "Chat Story ${{ steps.ver.outputs.version }}" \
+              --notes "APK Chat Story ${{ steps.ver.outputs.version }}. Unduh file .apk di bawah ini dari HP Android, lalu pasang."
+          fi

@@ -12,6 +12,12 @@ PWA Android untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, Ope
 
 Semua data (cerita, chat, gambar, API key) hanya tersimpan di HP. Backup rutin lewat **Pengaturan → Backup sekarang**.
 
+## Aplikasi Android (APK)
+
+Unduh file `.apk` terbaru di [Releases](https://github.com/alwaysYSL/chat-story/releases/latest), lalu pasang. Versi APK bisa memakai penyedia AI yang tidak mengizinkan aplikasi web (CORS), misalnya TokenKoding. Data APK terpisah dari versi web; pindahkan lewat Backup → Restore.
+
+Build lokal: `npm run cap:sync` lalu buka folder `android/` di Android Studio. Rilis dibuat otomatis oleh `.github/workflows/android.yml` saat versi di `package.json` naik.
+
 ## Pengembangan
 
 ```bash
