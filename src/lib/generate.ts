@@ -423,7 +423,7 @@ async function run({ chat, user, asst, settings: s, kind, prefixText, prevStatus
         model: resolved.model,
         messages,
         thinking,
-        temperature: temperatureFor(resolved.model, s.creativity),
+        temperature: temperatureFor(resolved.provider, resolved.model, s.creativity),
         maxTokens: maxTokensFor(s, user.length ?? 'normal', thinking),
         prefix: usePrefix,
       },
