@@ -2,8 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { db, type Page } from '../db';
-import { MarkdownView } from '../components/Blocks';
-import { StoryEditor } from '../components/Editor';
+import { StoryEditor, type StreamInfo } from '../components/Editor';
 import {
   IconArrowBottom,
   IconArrowTop,
@@ -22,11 +21,15 @@ import {
 import { ExportSheet, IconPicker, PageMenu } from '../components/PageMenu';
 import { BottomBar, PromptSheet, Sheet, SheetItem, toast } from '../components/ui';
 import { getBrief } from '../lib/context';
+import { flushEditors, registerFlush } from '../lib/editors';
 import { stopGeneration, useActiveGen } from '../lib/generate';
-import { displayTitle, getMainChat, moveChapter, renamePage } from '../lib/pages';
-import { takeJump, type NavState } from '../lib/nav';
-import { useSettings } from '../lib/settings';
+import { discardIfUntouched, displayTitle, getMainChat, moveChapter, renamePage } from '../lib/pages';
+import { goBack, takeJump, takeRedirect, type NavState } from '../lib/nav';
+import { markChanged, useSettings } from '../lib/settings';
 import { debounce, formatNumber, formatRupiah, formatUsd } from '../lib/util';
+
+/** Jumlah tampilan yang sedang membuka tiap page (StrictMode memasang komponen dua kali). */
+const openPages = new Map<string, number>();
 
 export default function PageView() {
   const { id = '' } = useParams();
@@ -61,19 +64,51 @@ export default function PageView() {
   const [costOpen, setCostOpen] = useState(false);
   const [orderOpen, setOrderOpen] = useState(false);
   const [title, setTitle] = useState('');
+  const titleFocused = useRef(false);
+  const titleRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Catat waktu dibuka.
+  // Kembali dari chat lalu langsung pindah ke page tujuan (lihat lib/nav.ts).
   useEffect(() => {
-    if (id) void db.pages.update(id, { openedAt: Date.now() });
+    const to = takeRedirect(id);
+    if (to && to !== id) nav(`/page/${to}`, { replace: true });
+  }, [id, nav]);
+
+  // Catat waktu dibuka. Saat ditinggal, page yang tidak pernah diisi dihapus.
+  useEffect(() => {
+    if (!id) return;
+    void db.pages.update(id, { openedAt: Date.now() });
     restored.current = false;
+    openPages.set(id, (openPages.get(id) ?? 0) + 1);
+    return () => {
+      openPages.set(id, (openPages.get(id) ?? 1) - 1);
+      setTimeout(() => {
+        if ((openPages.get(id) ?? 0) > 0) return;
+        void flushEditors().then(() => discardIfUntouched(id));
+      }, 400);
+    };
   }, [id]);
 
+  // Judul dari database (mis. usulan AI) hanya ditimpa kalau pengguna tidak sedang mengetik judul.
   useEffect(() => {
-    if (page) setTitle(page.title);
+    if (page && !titleFocused.current) setTitle(page.title);
   }, [page?.id, page?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveTitle = useMemo(() => debounce((pid: string, t: string) => void renamePage(pid, t), 600), []);
-  useEffect(() => () => saveTitle.flush(), [saveTitle]);
+  useEffect(() => {
+    const off = registerFlush(() => saveTitle.flush());
+    return () => {
+      saveTitle.flush();
+      off();
+    };
+  }, [saveTitle]);
+
+  // Page baru: fokus ke judul sekali, lalu buang penanda ?new=1 supaya tidak fokus lagi saat kembali.
+  useEffect(() => {
+    if (!page || params.get('new') !== '1') return;
+    titleRef.current?.focus();
+    params.delete('new');
+    setParams(params, { replace: true });
+  }, [page?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveScroll = useMemo(
     () => debounce((pid: string, y: number) => void db.pages.update(pid, { scrollY: y }), 400),
@@ -108,12 +143,23 @@ export default function PageView() {
     });
   }, [page, params, setParams]);
 
-  // Ikuti tulisan AI selama streaming, kecuali pengguna menggulir ke atas.
+  // Ikuti tulisan AI selama streaming (di posisinya di naskah), kecuali pengguna menggulir ke atas.
   useEffect(() => {
     if (!streamingHere || !follow.current) return;
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [streamingHere, gen?.live]);
+    if (!el) return;
+    requestAnimationFrame(() => {
+      const w = el.querySelector('.stream-widget');
+      if (!w) return;
+      const delta = w.getBoundingClientRect().bottom - el.getBoundingClientRect().bottom + 140;
+      if (delta > 0) el.scrollTop += delta;
+    });
+  }, [streamingHere, gen?.live, gen?.thinking]);
+
+  const stream: StreamInfo | null = useMemo(
+    () => (streamingHere && gen ? { seg: gen.messageId, text: gen.live, thinking: gen.thinking } : null),
+    [streamingHere, gen?.messageId, gen?.live, gen?.thinking], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   useEffect(() => {
     if (streamingHere) follow.current = true;
@@ -163,7 +209,7 @@ export default function PageView() {
   return (
     <div className="screen page-screen">
       <header className="page-header">
-        <button className="icon-btn" aria-label="Kembali" onClick={() => (history.length > 1 ? nav(-1) : nav('/'))}>
+        <button className="icon-btn" aria-label="Kembali" onClick={() => goBack(nav)}>
           <IconBack />
         </button>
         <div className="crumb">
@@ -187,7 +233,10 @@ export default function PageView() {
         onScroll={(e) => {
           const el = e.currentTarget;
           saveScroll(page.id, el.scrollTop);
-          if (streamingHere) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+          if (streamingHere) {
+            const w = el.querySelector('.stream-widget');
+            follow.current = !w || w.getBoundingClientRect().bottom - el.getBoundingClientRect().bottom < 260;
+          }
         }}
       >
         <div className="page-body">
@@ -201,7 +250,11 @@ export default function PageView() {
             rows={1}
             value={title}
             placeholder={isChapter ? 'Nama bab' : 'Tanpa judul'}
-            autoFocus={params.get('new') === '1'}
+            onFocus={() => (titleFocused.current = true)}
+            onBlur={() => {
+              titleFocused.current = false;
+              saveTitle.flush();
+            }}
             onChange={(e) => {
               setTitle(e.target.value);
               saveTitle(page.id, e.target.value);
@@ -212,6 +265,7 @@ export default function PageView() {
               t.style.height = t.scrollHeight + 'px';
             }}
             ref={(t) => {
+              titleRef.current = t;
               if (t) {
                 t.style.height = 'auto';
                 t.style.height = t.scrollHeight + 'px';
@@ -231,21 +285,10 @@ export default function PageView() {
             key={page.id}
             page={page}
             editable={!streamingHere}
+            stream={stream}
             onFocusChange={setEditing}
             onReady={onEditorReady}
           />
-
-          {streamingHere && (
-            <div className="stream-preview" aria-live="polite">
-              {gen.live ? <MarkdownView text={gen.live} className="story-text" /> : null}
-              <div className="typing">
-                <span />
-                <span />
-                <span />
-                {gen.thinking ? ' AI sedang berpikir…' : ''}
-              </div>
-            </div>
-          )}
 
           <div className="page-foot">
             {!isChapter && (chapters?.length ?? 0) > 0 && (
@@ -320,7 +363,7 @@ export default function PageView() {
         page={page}
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
-        onOpenPage={(pid) => nav(`/page/${pid}`)}
+        onOpenPage={(pid) => nav(`/page/${pid}`, { replace: true })}
         onDeleted={() => nav(isChapter && rootId ? `/page/${rootId}` : '/', { replace: true })}
         extra={
           <>
@@ -382,7 +425,12 @@ export default function PageView() {
         onSubmit={async (v) => {
           if (!mainChat) return;
           const b = await getBrief(mainChat.id);
+          if (!v.trim()) {
+            toast('Brief tidak boleh kosong.');
+            return;
+          }
           if (b) await db.messages.update(b.id, { text: v.trim() });
+          markChanged();
           toast('Brief disimpan');
         }}
       />

@@ -125,12 +125,12 @@ function modelKey(req: Pick<ChatRequest, 'provider' | 'model'>) {
   return `${req.provider.id}::${req.model.id}`;
 }
 
-export function buildBody(req: ChatRequest, stream: boolean): Record<string, unknown> {
+export function buildBody(req: ChatRequest, stream: boolean, extraForForced = true): Record<string, unknown> {
   const forced = !req.thinking && reasoningRequired.has(modelKey(req));
   const body: Record<string, unknown> = {
     model: req.model.id,
     messages: req.messages,
-    max_tokens: forced ? req.maxTokens + FORCED_REASONING_TOKENS : req.maxTokens,
+    max_tokens: forced && extraForForced ? req.maxTokens + FORCED_REASONING_TOKENS : req.maxTokens,
     ...(forced ? {} : thinkingParams(req.model, req.thinking)),
   };
   if (stream) {
@@ -179,51 +179,78 @@ export async function streamChat(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  let dataLines: string[] = [];
   let content = '';
   let usage: Usage = { hit: 0, miss: 0, out: 0 };
   let finishReason: string | null = null;
   let done = false;
 
+  type Chunk = {
+    choices?: {
+      delta?: { content?: string | null; reasoning_content?: string | null; reasoning?: string | null };
+      finish_reason?: string | null;
+    }[];
+    usage?: Record<string, unknown> | null;
+    error?: { message?: string };
+  };
+
+  /** Satu event SSE selesai (baris kosong, atau akhir stream). */
+  const dispatch = () => {
+    if (!dataLines.length) return;
+    const data = dataLines.join('\n').trim();
+    dataLines = [];
+    if (data === '[DONE]') {
+      done = true;
+      return;
+    }
+    let j: Chunk;
+    try {
+      j = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (j.error) throw new ApiError('unknown', j.error.message ?? `Kesalahan dari ${name}.`);
+    const ch = j.choices?.[0];
+    const reasoning = ch?.delta?.reasoning_content ?? ch?.delta?.reasoning;
+    if (reasoning) onDelta(reasoning, 'reasoning');
+    if (ch?.delta?.content) {
+      content += ch.delta.content;
+      onDelta(ch.delta.content, 'content');
+    }
+    if (ch?.finish_reason) finishReason = ch.finish_reason;
+    if (j.usage) usage = toUsage(j.usage);
+  };
+
+  const handleLine = (raw: string) => {
+    const line = raw.replace(/\r$/, '');
+    if (line === '') return dispatch();
+    if (line.startsWith(':')) return; // komentar / keep-alive
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).replace(/^ /, ''));
+      // Kebanyakan penyedia mengirim satu baris data per event tanpa baris kosong yang rapi.
+      const joined = dataLines.join('\n').trim();
+      if (joined === '[DONE]' || isCompleteJson(joined)) dispatch();
+    }
+  };
+
   try {
     while (!done) {
       const r = await reader.read();
-      if (r.done) break;
+      if (r.done) {
+        buf += decoder.decode();
+        break;
+      }
       buf += decoder.decode(r.value, { stream: true });
       let idx: number;
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, idx).trim();
+      while (!done && (idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx);
         buf = buf.slice(idx + 1);
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') {
-          done = true;
-          break;
-        }
-        let j: {
-          choices?: {
-            delta?: { content?: string | null; reasoning_content?: string | null; reasoning?: string | null };
-            finish_reason?: string | null;
-          }[];
-          usage?: Record<string, unknown> | null;
-          error?: { message?: string };
-        };
-        try {
-          j = JSON.parse(data);
-        } catch {
-          continue;
-        }
-        if (j.error) throw new ApiError('unknown', j.error.message ?? `Kesalahan dari ${name}.`);
-        const ch = j.choices?.[0];
-        const reasoning = ch?.delta?.reasoning_content ?? ch?.delta?.reasoning;
-        if (reasoning) onDelta(reasoning, 'reasoning');
-        if (ch?.delta?.content) {
-          content += ch.delta.content;
-          onDelta(ch.delta.content, 'content');
-        }
-        if (ch?.finish_reason) finishReason = ch.finish_reason;
-        if (j.usage) usage = toUsage(j.usage);
+        handleLine(line);
       }
     }
+    // Sisa terakhir tanpa baris baru di akhir stream.
+    if (!done && buf) handleLine(buf);
+    if (!done) dispatch();
   } catch (e) {
     if (e instanceof ApiError) throw Object.assign(e, { partial: content, usage });
     const err =
@@ -243,6 +270,16 @@ export async function streamChat(
     );
   }
   return { content, usage, finishReason };
+}
+
+function isCompleteJson(s: string): boolean {
+  if (!s.startsWith('{')) return false;
+  try {
+    JSON.parse(s);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Kalau model menolak mode berpikir dimatikan, ingat dan kembalikan true supaya permintaan diulang. */
@@ -296,7 +333,8 @@ export async function testProvider(provider: ProviderConfig, model?: ModelConfig
       return await fetch(chatUrl(provider), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-        body: JSON.stringify(buildBody(req, false)),
+        // Tes koneksi tidak perlu jawaban panjang, walaupun modelnya wajib berpikir.
+        body: JSON.stringify(buildBody(req, false, false)),
       });
     } catch {
       throw new ApiError(
@@ -312,5 +350,10 @@ export async function testProvider(provider: ProviderConfig, model?: ModelConfig
     else throw errorFromStatus(res.status, detail, name);
   }
   if (!res.ok) throw errorFromStatus(res.status, await readError(res), name);
+  // Sebagian penyedia mengembalikan status 200 dengan pesan error di isinya.
+  const body = (await res.json().catch(() => null)) as { error?: { message?: string }; choices?: unknown[] } | null;
+  if (!body || body.error || !Array.isArray(body.choices)) {
+    throw new ApiError('invalid', `${name} membalas dengan format yang tidak dikenal${body?.error?.message ? `: ${body.error.message}` : '.'}`);
+  }
   return { ok: true, text: `Terhubung ke ${name} dengan model ${m.label}. Cek saldo di situs ${name}.` };
 }

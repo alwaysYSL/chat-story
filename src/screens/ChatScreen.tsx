@@ -41,13 +41,13 @@ import {
 } from '../lib/generate';
 import { compressImage, IMAGE_TYPES, MAX_TEXT_BYTES, TEXT_EXT } from '../lib/images';
 import { findBrief } from '../lib/context';
-import { cleanOutput, segmentText } from '../lib/markdown';
-import { setJump, type NavState } from '../lib/nav';
+import { ownedText, versionBody } from '../lib/markdown';
+import { goBack, setJump, setRedirect, type NavState } from '../lib/nav';
 import { displayTitle } from '../lib/pages';
 import { isPeak } from '../lib/pricing';
 import { estimateTokens, findModel, usableModels, type ModelRef } from '../lib/providers';
 import { effectiveReminder, LENGTH_LABEL, targetRange } from '../lib/prompts';
-import { useSettings, type Settings } from '../lib/settings';
+import { markChanged, useSettings, type Settings } from '../lib/settings';
 import { copyText, debounce, formatNumber, formatRupiah } from '../lib/util';
 
 const NEW_DRAFT_KEY = (scope: string) => `draft:new:${scope}`;
@@ -96,7 +96,7 @@ export default function ChatScreen() {
   const draftScope = isNew ? NEW_DRAFT_KEY(rootId ?? kind) : null;
   const [text, setText] = useState('');
   const [pending, setPending] = useState<PendingAttachment[]>([]);
-  const [write, setWrite] = useState(true);
+  const [writeChoice, setWrite] = useState<boolean | null>(null);
   const [target, setTarget] = useState<'last' | 'new'>('last');
   const [length, setLength] = useState<LengthPreset>('normal');
   const [model, setModel] = useState<ModelRef | null>(null);
@@ -126,11 +126,13 @@ export default function ChatScreen() {
   const pickRef = (r: ModelRef | null | undefined) =>
     r && usable.some((u) => u.provider.id === r.provider && u.model.id === r.model) ? r : null;
   const firstUsable = usable[0] ? { provider: usable[0].provider.id, model: usable[0].model.id } : null;
-  const lastSent = [...(messages ?? [])].reverse().find((m) => m.role === 'user' && m.model);
+  const lastSent = [...(messages ?? [])].reverse().find((m) => m.role === 'user' && m.model && m.status !== 'canceled');
   const lastUsed: ModelRef | null = lastSent ? { provider: lastSent.provider ?? 'deepseek', model: lastSent.model } : null;
   const effModel: ModelRef | null = pickRef(model) ?? pickRef(lastUsed) ?? pickRef(settings?.defaultModel) ?? firstUsable;
   const resolved = settings && effModel ? findModel(settings.providers, effModel) : null;
   const effThinking = thinking ?? settings?.thinking ?? false;
+  // Mode (tulis/diskusi) mengikuti pesan terakhir di chat ini, kecuali diganti barusan.
+  const write = writeChoice ?? (lastSent ? lastSent.mode === 'write' : true);
 
   // Muat draf
   useEffect(() => {
@@ -153,6 +155,9 @@ export default function ChatScreen() {
     [isNew, id, draftScope],
   );
   useEffect(() => () => saveDraft.flush(), [saveDraft]);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  useEffect(() => () => pendingRef.current.forEach((p) => p.previewUrl && URL.revokeObjectURL(p.previewUrl)), []);
 
   // Tinggi kolom ketik mengikuti isi (juga saat draf dimuat).
   useEffect(() => {
@@ -224,7 +229,11 @@ export default function ChatScreen() {
   const goToPage = (pageId: string, seg?: string) => {
     setJump(seg ? { pageId, seg } : { pageId, end: true });
     if (cameFrom === pageId) nav(-1);
-    else nav(`/page/${pageId}`, { replace: true });
+    else if (cameFrom) {
+      // Kembali ke page asal lalu langsung diganti page tujuan, supaya riwayat tidak menumpuk.
+      setRedirect(cameFrom, pageId);
+      nav(-1);
+    } else nav(`/page/${pageId}`, { replace: true });
   };
 
   const handleError = (e: unknown) => {
@@ -282,7 +291,8 @@ export default function ChatScreen() {
         thinking: effThinking,
       });
       setText('');
-      setPending([]);
+      if (!continueOnly) pending.forEach((p) => p.previewUrl && URL.revokeObjectURL(p.previewUrl));
+      setPending(continueOnly ? pending : []);
       saveDraft.cancel();
       if (isNew) localStorage.removeItem(draftScope!);
       setTarget('last');
@@ -300,10 +310,10 @@ export default function ChatScreen() {
   const replyText = (m: Message): string => {
     if (m.mode !== 'write') return m.text;
     const p = storyPages?.find((x) => x.id === m.targetPageId);
-    const cur = p ? segmentText(p.doc, m.id) : null;
+    const cur = p ? ownedText(p.doc, m.id) : null;
     if (cur) return cur;
     const v = m.versions[m.active];
-    return v ? cleanOutput(v.raw, m.expectTitle, true).body : '';
+    return v ? versionBody(v, m.expectTitle) : '';
   };
   const copy = async (t: string) => toast((await copyText(t)) ? 'Disalin' : 'Gagal menyalin');
   const retry = async (asst: Message) => {
@@ -326,6 +336,7 @@ export default function ChatScreen() {
     const excluded = !asst.excluded;
     await db.messages.update(asst.id, { excluded });
     if (user) await db.messages.update(user.id, { excluded });
+    markChanged();
     toast(excluded ? 'Tidak dibaca AI lagi' : 'Dibaca AI lagi');
   };
   const cancel = async (asst: Message) => {
@@ -398,7 +409,7 @@ export default function ChatScreen() {
   return (
     <div className="screen chat-screen">
       <header className="page-header">
-        <button className="icon-btn" aria-label="Kembali" onClick={() => (history.length > 1 ? nav(-1) : nav('/'))}>
+        <button className="icon-btn" aria-label="Kembali" onClick={() => goBack(nav)}>
           <IconBack />
         </button>
         <div className="chat-head-title">
@@ -407,7 +418,16 @@ export default function ChatScreen() {
         <button className="icon-btn" aria-label="Riwayat chat" onClick={() => nav('/chats')}>
           <IconHistory />
         </button>
-        <button className="icon-btn" aria-label="Chat baru" onClick={() => nav('/chat/new', { replace: true })}>
+        <button
+          className="icon-btn"
+          aria-label={rootId ? 'Chat diskusi baru untuk cerita ini' : 'Chat baru'}
+          onClick={() =>
+            // Di chat cerita: chat diskusi baru untuk cerita yang sama (satu cerita hanya punya satu chat utama).
+            rootId
+              ? nav(`/chat/new?page=${rootId}&kind=discuss${fromPage ? `&from=${fromPage}` : ''}`, { replace: true, state: loc.state })
+              : nav('/chat/new', { replace: true })
+          }
+        >
           <IconEdit />
         </button>
       </header>
@@ -531,20 +551,20 @@ export default function ChatScreen() {
         })}
       </div>
 
-      {!atBottom && (
-        <button
-          className="icon-btn small-float to-bottom"
-          aria-label="Ke pesan terbaru"
-          onClick={() => {
-            stick.current = true;
-            listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
-          }}
-        >
-          <IconArrowBottom size={18} />
-        </button>
-      )}
-
       <div className="composer">
+        {!atBottom && (
+          <button
+            className="icon-btn small-float to-bottom"
+            aria-label="Ke pesan terbaru"
+            onClick={() => {
+              stick.current = true;
+              listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
+            }}
+          >
+            <IconArrowBottom size={18} />
+          </button>
+        )}
+
         {note}
 
         {pending.length > 0 && (
@@ -559,7 +579,14 @@ export default function ChatScreen() {
                     {p.name}
                   </span>
                 )}
-                <button className="pending-x" aria-label="Hapus lampiran" onClick={() => setPending((arr) => arr.filter((_, j) => j !== i))}>
+                <button
+                  className="pending-x"
+                  aria-label="Hapus lampiran"
+                  onClick={() => {
+                    if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+                    setPending((arr) => arr.filter((_, j) => j !== i));
+                  }}
+                >
                   <IconClose size={14} />
                 </button>
               </div>
@@ -757,6 +784,7 @@ export default function ChatScreen() {
         onSave={async (v) => {
           if (!chat) return;
           await db.chats.update(chat.id, { reminder: v });
+          markChanged();
           toast(v === undefined ? 'Pengingat diambil dari brief' : v.trim() ? 'Pengingat disimpan' : 'Pengingat dimatikan');
         }}
       />
@@ -770,7 +798,12 @@ export default function ChatScreen() {
         onClose={() => setEditBrief(null)}
         onSubmit={async (v) => {
           if (!editBrief) return;
+          if (!v.trim()) {
+            toast('Brief tidak boleh kosong.');
+            return;
+          }
           await db.messages.update(editBrief.id, { text: v.trim() });
+          markChanged();
           toast('Brief disimpan');
         }}
       />
@@ -872,7 +905,12 @@ function UserBubble({ m, atts, onMenu }: { m: Message; atts: Attachment[]; onMen
   const [expanded, setExpanded] = useState(false);
   const lp = useLongPress(onMenu);
   const long = m.text.length > 400;
-  const urls = useMemo(() => atts.map((a) => (a.kind === 'image' && a.blob ? URL.createObjectURL(a.blob) : null)), [atts]);
+  // Dibuat sekali per lampiran (bukan setiap render saat AI menulis), supaya gambar tidak berkedip.
+  const attKey = atts.map((a) => a.id).join(',');
+  const urls = useMemo(
+    () => atts.map((a) => (a.kind === 'image' && a.blob ? URL.createObjectURL(a.blob) : null)),
+    [attKey], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   useEffect(() => () => urls.forEach((u) => u && URL.revokeObjectURL(u)), [urls]);
   return (
     <div className={'msg user' + (m.excluded ? ' excluded' : '')}>
@@ -933,7 +971,7 @@ function ActionRow({
       <button className="act-btn" aria-label="Coba lagi" disabled={busy} onClick={onRetry}>
         <IconRetry size={17} />
       </button>
-      {m.versions.length > 1 && m.mode === 'write' && (
+      {m.versions.length > 1 && (
         <span className="versions">
           <button className="act-btn" aria-label="Versi sebelumnya" disabled={busy || m.active === 0} onClick={() => onVersion(m.active - 1)}>
             ‹
@@ -961,11 +999,12 @@ function ActionRow({
   );
 }
 
-function ErrorLine({ text }: { text: string }) {
+function ErrorLine({ text, kept }: { text: string; kept?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <button className={'error-line' + (open ? ' open' : '')} onClick={() => setOpen((v) => !v)}>
-      Gagal: {text}
+      {kept ? 'Percobaan terakhir gagal (versi sebelumnya tetap dipakai): ' : 'Gagal: '}
+      {text}
     </button>
   );
 }
@@ -1021,8 +1060,9 @@ function WriteCard({
           {meta && <small>{meta}</small>}
         </span>
       </button>
-      {status === 'error' && m.error && <ErrorLine text={m.error} />}
-      {status === 'interrupted' && m.error && <div className="soft-line">{m.error}</div>}
+      {!streaming && status === 'interrupted' && m.error && <div className="soft-line">{m.error}</div>}
+      {/* Termasuk Coba lagi yang gagal: versi lama tetap dipakai, alasannya ditampilkan. */}
+      {!streaming && status !== 'interrupted' && m.error && <ErrorLine text={m.error} kept={m.versions.length > 0 && status !== 'error'} />}
       {actions}
     </div>
   );
@@ -1071,7 +1111,7 @@ function DiscussBubble({
           </span>
         ) : null}
       </div>
-      {m.status === 'error' && m.error && <ErrorLine text={m.error} />}
+      {live === null && m.error && m.status !== 'interrupted' && <ErrorLine text={m.error} kept={!!m.text.trim()} />}
       {live === null && meta && <div className="msg-meta">{meta}</div>}
       {actions}
     </div>
@@ -1237,8 +1277,15 @@ function MessageMenu({
         )}
         {isLast && pair && <SheetItem icon={<IconRetry />} label="Kirim ulang" hint="Tulis ulang balasannya" disabled={busy} onClick={run(() => onRetry(pair))} />}
         {t && <SheetItem icon={<IconText />} label="Pilih teks" onClick={run(() => onSelect(t))} />}
-        {isLast && pair && pair.length !== 'opening' && (
-          <SheetItem icon={<IconTrash />} label="Hapus" hint="Pesan dan balasannya dibatalkan" danger disabled={busy} onClick={run(() => onCancel(pair))} />
+        {isLast && pair && (
+          <SheetItem
+            icon={<IconTrash />}
+            label="Hapus"
+            hint={pair.length === 'opening' ? 'Pembukaan dihapus dari naskah; pesan berikutnya jadi brief baru' : 'Pesan dan balasannya dibatalkan'}
+            danger
+            disabled={busy}
+            onClick={run(() => onCancel(pair))}
+          />
         )}
         {!isLast && !isBrief && <p className="note pad">Pesan lama tidak bisa diedit karena tulisan sesudahnya dibuat berdasarkan pesan ini.</p>}
       </>
@@ -1263,7 +1310,7 @@ function MessageMenu({
             onClick={run(() => onExclude(m, pair))}
           />
         )}
-        {isLast && m.length !== 'opening' && (
+        {isLast && (
           <SheetItem
             icon={<IconTrash />}
             label="Batalkan"

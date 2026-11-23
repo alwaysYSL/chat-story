@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBack } from '../lib/nav';
 import { db } from '../db';
 import { IconBack, IconChat, IconPage } from '../components/Icons';
 import { displayTitle } from '../lib/pages';
@@ -35,7 +36,7 @@ export default function Search() {
   return (
     <div className="screen">
       <header className="page-header">
-        <button className="icon-btn" aria-label="Kembali" onClick={() => nav(-1)}>
+        <button className="icon-btn" aria-label="Kembali" onClick={() => goBack(nav)}>
           <IconBack />
         </button>
         <input

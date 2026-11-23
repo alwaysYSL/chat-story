@@ -1830,3 +1830,52 @@ input[type='range'] {
 .msg.excluded .bubble {
   opacity: 0.55;
 }
+
+/* ---------- Perbaikan audit ---------- */
+.composer {
+  position: relative;
+}
+.composer .to-bottom {
+  position: absolute;
+  top: -50px;
+  bottom: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+body:has(.chat-screen) .toast {
+  bottom: auto;
+  top: calc(env(safe-area-inset-top) + 64px);
+}
+.stream-widget {
+  font-family: var(--read-font);
+  font-size: var(--read-size);
+  line-height: var(--read-line);
+  color: var(--text);
+  border-left: 2px solid var(--accent-soft);
+  padding-left: 10px;
+  margin-left: -12px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.stream-widget p {
+  margin: 0 0 0.9em;
+}
+.stream-widget h2 {
+  font-size: 1.3em;
+  margin: 1.2em 0 0.5em;
+}
+.stream-widget hr {
+  border: 0;
+  height: 1em;
+  margin: 1.4em 0;
+  text-align: center;
+}
+.stream-widget hr::before {
+  content: '* * *';
+  color: var(--text-3);
+  letter-spacing: 0.3em;
+}
+/* Penanda posisi balasan yang sedang ditulis ulang tidak perlu terlihat sebagai baris kosong. */
+.ProseMirror[contenteditable='false'] p[data-seg]:has(> br:only-child) {
+  display: none;
+}

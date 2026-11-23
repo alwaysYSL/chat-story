@@ -90,10 +90,14 @@ Tampilan dan perilaku mengikuti aplikasi chat AI pada umumnya (ChatGPT, Claude, 
   - **Chip model** membuka daftar model dan saklar mode berpikir. Ikon lampu = berpikir nyala; titik oranye = jam peak DeepSeek. Chat mengingat model terakhir yang dipakai.
   - **Tombol kirim** berubah menjadi **Lanjutkan** saat kolom kosong dalam mode tulis (AI melanjutkan tanpa arahan); menjadi **Stop** selama AI menulis.
   - Maksimal satu catatan di atas kolom ketik (bisa ditutup): API key belum ada, model tidak bisa membaca gambar, saran bab baru, atau info bab lama.
-  - Draf yang belum terkirim disimpan otomatis.
+  - Draf yang belum terkirim disimpan otomatis. Mode (tulis/diskusi) dan model mengikuti pesan terakhir di chat itu.
+  - ✏️ di chat cerita membuka chat diskusi baru untuk cerita yang sama.
 - **Selama AI menulis:** layar dijaga tetap menyala (Wake Lock), dan aplikasi pindah ke page supaya tulisan terlihat mengalir.
 
 ### 4.3a Navigasi tanpa riwayat berulang
+- Tombol back Android dan Esc menutup sheet paling atas dulu (CloseWatcher), baru kemudian halaman.
+- Tombol ‹ di halaman yang dibuka langsung (tautan/bookmark) kembali ke Beranda, bukan keluar aplikasi.
+- Page dan bab yang dibuat lalu ditinggal tanpa diisi apa pun dihapus otomatis.
 - Page membuka chat; setelah mengirim, chat **kembali** ke page itu (history back), bukan membuka page baru.
 - Kalau chat tidak dibuka dari page tujuan (chat baru dari Beranda, dari daftar chat, atau menulis ke bab baru), page **menggantikan** chat di riwayat.
 - Pindah antara page cerita dan bab (breadcrumb, daftar bab, Bab sebelumnya/berikutnya) menggantikan entri riwayat, jadi back dari page mana pun langsung kembali ke halaman sebelum cerita dibuka.
@@ -201,7 +205,9 @@ user      : arahan baru + target panjang   ← permintaan sekarang
 - **Ukuran konteks:** perkiraan token cerita tampil di sheet model. Setiap model punya isian batas konteks; kalau cerita melewati 85% batas model, muncul peringatan.
 - **Bab:** konteks disusun mengikuti urutan bab. Judul bab disisipkan sebagai heading di awal balasan pertama bab itu, supaya AI tahu batas bab.
 - **Pesan diskusi** di chat utama ikut konteks di posisi kronologisnya.
-- **Teks manual:** teks yang Anda ketik sendiri digabung ke balasan AI terdekat di page yang sama. Kalau sebuah bab hanya berisi teks manual, teks itu dikirim sebagai pesan user berlabel "teks yang ditulis penulis".
+- **Paragraf AI vs paragraf penulis:** setiap paragraf tahu siapa penulisnya. Teks AI yang diedit atau dipecah (Enter di tengah) tetap milik AI. Paragraf baru yang diketik penulis, dan teks yang ditempel, milik penulis.
+- **Teks manual:** untuk konteks AI, paragraf penulis dibaca bersama balasan AI di atasnya. Coba lagi, Batalkan, dan ganti versi hanya mengubah paragraf milik AI; paragraf penulis tidak pernah ikut terhapus.
+- **Menulis ulang yang nyambung:** saat Coba lagi, Edit & tulis ulang, atau Lanjutkan dari sini, paragraf penulis di bawah balasan itu ikut dikirim sebagai "teks sesudahnya", dan AI diminta menulis supaya nyambung ke situ. Tulisan baru ditempatkan di posisi balasan lama (di atas paragraf penulis), dan selama menulis teksnya mengalir di posisi itu. Kalau sebuah bab hanya berisi teks manual, teks itu dikirim sebagai pesan user berlabel "teks yang ditulis penulis".
 - **Balasan yang dihapus seluruhnya dari naskah** atau dibatalkan: pasangan arahan dan balasannya keluar dari konteks.
 - **Pembukaan:** permintaan pertama meminta AI menulis judul di baris pertama dengan format tetap, lalu aplikasi memisahkan judul dari naskah.
 - **Pembersihan hasil:** kalimat pembuka semacam "Berikut lanjutannya:" dibuang otomatis.
@@ -253,7 +259,12 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 ## 9. Backup dan ekspor
 - **Backup:** satu file berisi semua page, chat, lampiran, dan pengaturan (tanpa API key). Bisa langsung dikirim ke Google Drive lewat menu share.
 - **Pengingat backup** setiap 7 hari kalau ada perubahan.
-- **Restore:** pilihan "Gabungkan" atau "Ganti semua", dengan konfirmasi.
+- **Restore:**
+  - **Gabungkan:** item yang belum ada ditambahkan; yang ada di keduanya memakai versi yang lebih baru. Pengaturan di HP tidak diubah.
+  - **Ganti semua:** konfirmasi kedua, lalu data sekarang diunduh dulu sebagai file pengaman. Penyedia AI dan API key di HP tetap ada.
+  - Item yang di backup ada di Sampah mendapat masa 30 hari baru.
+- **Backup otomatis sebelum pembaruan:** sebelum pembaruan yang mengubah format data, seluruh data disalin di HP (tanpa API key) dan bisa diunduh dari Pengaturan → Data.
+- **Backup** baru dianggap selesai kalau file benar-benar dibagikan atau diunduh (menutup menu share = batal).
 - **Ekspor cerita:** salin sebagai Markdown (siap ditempel ke Notion) atau bagikan file `.md`/`.txt`, untuk satu bab atau seluruh cerita.
 
 ## 10. Keamanan

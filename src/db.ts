@@ -61,6 +61,8 @@ export interface Version {
   words: number;
   usage: Usage;
   costUsd: number;
+  /** raw sudah berupa isi naskah bersih (editan penulis / hasil sambungan): jangan dibersihkan ulang */
+  clean?: boolean;
 }
 
 export interface Message {

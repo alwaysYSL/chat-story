@@ -3,7 +3,8 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, type Chat } from '../db';
 import { IconEdit, IconMore, IconTrash } from '../components/Icons';
-import { BottomBar, PromptSheet, Sheet, SheetItem, TopTabs, toast } from '../components/ui';
+import { BottomBar, PromptSheet, Sheet, SheetItem, TopTabs, toast, useLongPress } from '../components/ui';
+import { markChanged } from '../lib/settings';
 import { displayTitle, trashChat } from '../lib/pages';
 import { timeAgo } from '../lib/util';
 
@@ -64,25 +65,16 @@ export default function Chats() {
               {g.items.map((c) => {
                 const pt = pageTitle(c.pageId);
                 return (
-                  <li key={c.id} className="chat-row">
-                    <button className="chat-main" onClick={() => nav(`/chat/${c.id}`)}>
-                      <span className="chat-title">{c.title}</span>
-                      <small>
-                        {KIND_LABEL[c.kind]}
-                        {pt ? ` · ${pt}` : ''} · {timeAgo(c.updatedAt)}
-                      </small>
-                    </button>
-                    <button
-                      className="icon-btn"
-                      aria-label="Menu chat"
-                      onClick={() => {
-                        setMenuChat(c);
-                        setMenuOpen(true);
-                      }}
-                    >
-                      <IconMore size={20} />
-                    </button>
-                  </li>
+                  <ChatRow
+                    key={c.id}
+                    c={c}
+                    sub={`${KIND_LABEL[c.kind]}${pt ? ` · ${pt}` : ''} · ${timeAgo(c.updatedAt)}`}
+                    onOpen={() => nav(`/chat/${c.id}`)}
+                    onMenu={() => {
+                      setMenuChat(c);
+                      setMenuOpen(true);
+                    }}
+                  />
                 );
               })}
             </ul>
@@ -119,10 +111,29 @@ export default function Chats() {
             title="Nama chat"
             initial={menu.title}
             onClose={() => setRename(false)}
-            onSubmit={(v) => v.trim() && void db.chats.update(menu.id, { title: v.trim(), titleAuto: false })}
+            onSubmit={(v) => {
+              if (!v.trim()) return;
+              void db.chats.update(menu.id, { title: v.trim(), titleAuto: false });
+              markChanged();
+            }}
           />
         </>
       )}
     </div>
+  );
+}
+
+function ChatRow({ c, sub, onOpen, onMenu }: { c: Chat; sub: string; onOpen: () => void; onMenu: () => void }) {
+  const lp = useLongPress(onMenu);
+  return (
+    <li className="chat-row">
+      <button className="chat-main pressable" onClick={onOpen} {...lp}>
+        <span className="chat-title">{c.title}</span>
+        <small>{sub}</small>
+      </button>
+      <button className="icon-btn" aria-label="Menu chat" onClick={onMenu}>
+        <IconMore size={20} />
+      </button>
+    </li>
   );
 }

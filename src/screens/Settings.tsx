@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { IconBack } from '../components/Icons';
-import { Sheet, SheetItem, Toggle, toast } from '../components/ui';
+import { ConfirmSheet, Sheet, SheetItem, Toggle, toast } from '../components/ui';
+import { getSnapshotInfo, snapshotBlob, type SnapshotInfo } from '../lib/migrations';
+import { goBack } from '../lib/nav';
 import { backupFileName, createBackup, markBackedUp, restoreBackup } from '../lib/backup';
 import { ProviderList } from '../components/Providers';
 import { CREATIVITY_LABEL, updateSettings, useSettings, type Creativity, type Settings } from '../lib/settings';
@@ -71,6 +73,12 @@ export default function SettingsScreen() {
   const loc = useLocation();
   const [storage, setStorage] = useState<{ used: string; persisted: boolean } | null>(null);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState<File | null>(null);
+  const [backingUp, setBackingUp] = useState(false);
+  const [snapshot, setSnapshot] = useState<SnapshotInfo | null>(null);
+  useEffect(() => {
+    void getSnapshotInfo().then(setSnapshot);
+  }, []);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -91,29 +99,55 @@ export default function SettingsScreen() {
   const set = (patch: Partial<Settings>) => void updateSettings(patch);
 
   const doBackup = async () => {
-    const blob = await createBackup();
-    const name = backupFileName();
-    if (!(await shareFile(name, blob, 'Backup Chat Story'))) downloadFile(name, blob);
-    await markBackedUp();
-    toast('Backup dibuat');
+    if (backingUp) return;
+    setBackingUp(true);
+    try {
+      const { blob, at } = await createBackup();
+      const name = backupFileName();
+      const r = await shareFile(name, blob, 'Backup Chat Story');
+      if (r === 'canceled') {
+        toast('Backup dibatalkan. File belum tersimpan.');
+        return;
+      }
+      if (r === 'unsupported') downloadFile(name, blob);
+      await markBackedUp(at);
+      toast(r === 'shared' ? 'Backup dibagikan' : 'Backup diunduh ke folder Download');
+    } catch (e) {
+      toast('Backup gagal: ' + ((e as Error).message || String(e)));
+    } finally {
+      setBackingUp(false);
+    }
   };
 
-  const doRestore = async (mode: 'merge' | 'replace') => {
-    if (!restoreFile) return;
+  const doRestore = async (mode: 'merge' | 'replace', file: File | null = restoreFile) => {
+    if (!file) return;
+    setRestoreFile(null);
+    setConfirmReplace(null);
     try {
-      const r = await restoreBackup(restoreFile, mode);
-      toast(`Dipulihkan: ${r.pages} page, ${r.chats} chat`);
+      if (mode === 'replace') {
+        // Data di HP ini diunduh dulu sebagai pengaman sebelum diganti.
+        const { blob } = await createBackup();
+        downloadFile(backupFileName('chat-story-sebelum-restore'), blob);
+      }
+      const r = await restoreBackup(file, mode);
+      toast(
+        `Dipulihkan: ${r.pages} page, ${r.chats} chat` +
+          (r.keptNewer ? `. ${r.keptNewer} item di HP ini lebih baru, jadi tetap dipakai.` : ''),
+      );
     } catch (e) {
-      toast((e as Error).message);
-    } finally {
-      setRestoreFile(null);
+      toast((e as Error).message || 'Restore gagal.');
     }
+  };
+
+  const downloadSnapshot = async () => {
+    const blob = await snapshotBlob();
+    if (blob) downloadFile(backupFileName('chat-story-sebelum-pembaruan'), blob);
   };
 
   return (
     <div className="screen">
       <header className="page-header">
-        <button className="icon-btn" aria-label="Kembali" onClick={() => (history.length > 1 ? nav(-1) : nav('/'))}>
+        <button className="icon-btn" aria-label="Kembali" onClick={() => goBack(nav)}>
           <IconBack />
         </button>
         <div className="chat-head-title">Pengaturan</div>
@@ -213,8 +247,8 @@ export default function SettingsScreen() {
             {storage && ` Terpakai ${storage.used}. Penyimpanan permanen: ${storage.persisted ? 'aktif' : 'belum aktif'}.`}
           </p>
           <div className="row-buttons left">
-            <button className="btn btn-primary" onClick={() => void doBackup()}>
-              Backup sekarang
+            <button className="btn btn-primary" disabled={backingUp} onClick={() => void doBackup()}>
+              {backingUp ? 'Menyiapkan…' : 'Backup sekarang'}
             </button>
             <button className="btn" onClick={() => fileRef.current?.click()}>
               Restore dari file
@@ -242,6 +276,14 @@ export default function SettingsScreen() {
               Minta penyimpanan permanen
             </button>
           )}
+          {snapshot && (
+            <p className="note">
+              Backup otomatis sebelum pembaruan aplikasi ({timeAgo(snapshot.at)}).{' '}
+              <button className="link-btn" onClick={() => void downloadSnapshot()}>
+                Unduh
+              </button>
+            </p>
+          )}
           <Link to="/trash" className="settings-link">
             Sampah ›
           </Link>
@@ -260,16 +302,32 @@ export default function SettingsScreen() {
         <p className="note">{restoreFile?.name}</p>
         <SheetItem
           label="Gabungkan"
-          hint="Data di backup ditambahkan; item dengan id sama ditimpa"
+          hint="Tambahkan isi backup. Kalau ada di keduanya, yang lebih baru dipakai."
           onClick={() => void doRestore('merge')}
         />
         <SheetItem
           label="Ganti semua"
-          hint="Semua data di HP ini dihapus lalu diganti isi backup"
+          hint="Semua cerita & chat di HP ini diganti isi backup"
           danger
-          onClick={() => void doRestore('replace')}
+          onClick={() => {
+            setConfirmReplace(restoreFile);
+            setRestoreFile(null);
+          }}
         />
       </Sheet>
+      <ConfirmSheet
+        open={!!confirmReplace}
+        title="Ganti semua data?"
+        message="Semua cerita, bab, dan chat di HP ini dihapus lalu diganti isi backup. Data sekarang diunduh dulu sebagai file pengaman. Penyedia AI dan API key tetap ada."
+        confirmLabel="Ganti semua"
+        danger
+        onClose={() => setConfirmReplace(null)}
+        onConfirm={() => {
+          const f = confirmReplace;
+          setConfirmReplace(null);
+          if (f) void doRestore('replace', f);
+        }}
+      />
     </div>
   );
 }

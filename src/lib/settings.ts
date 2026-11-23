@@ -24,6 +24,8 @@ export interface Settings {
   serif: boolean;
   segMarker: boolean;
   lastBackupAt: number;
+  /** model bawaan yang dihapus pengguna (`provider::model`), supaya tidak muncul lagi saat update */
+  removedPresets: string[];
 }
 
 const DEFAULT_SETTINGS: Omit<Settings, 'providers'> = {
@@ -45,6 +47,7 @@ const DEFAULT_SETTINGS: Omit<Settings, 'providers'> = {
   serif: false,
   segMarker: false,
   lastBackupAt: 0,
+  removedPresets: [],
 };
 
 /**
@@ -77,7 +80,7 @@ export async function getSettings(): Promise<Settings> {
     merged.providers = presetProviders().map((p) => (p.id === 'deepseek' ? { ...p, apiKey: legacyKey ?? '' } : p));
     if (legacyModel) merged.defaultModel = { provider: 'deepseek', model: legacyModel };
   }
-  merged.providers = withPresetDefaults(merged.providers);
+  merged.providers = withPresetDefaults(merged.providers, merged.removedPresets);
   return merged;
 }
 

@@ -52,7 +52,7 @@ export function ExportSheet({ page, open, onClose }: { page: Page; open: boolean
           const md = await storyMarkdown(rootId);
           const blob = new Blob([md], { type: 'text/markdown' });
           const name = fileName(displayTitle(root)) + '.md';
-          if (!(await shareFile(name, blob, displayTitle(root)))) downloadFile(name, blob);
+          if ((await shareFile(name, blob, displayTitle(root))) === 'unsupported') downloadFile(name, blob);
           onClose();
         }}
       />

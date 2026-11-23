@@ -38,6 +38,11 @@ export function ToastHost() {
 
 /* ---------- Bottom sheet ---------- */
 
+interface CloseWatcherLike {
+  onclose: (() => void) | null;
+  destroy(): void;
+}
+
 export function Sheet({
   open,
   onClose,
@@ -49,12 +54,27 @@ export function Sheet({
   title?: string;
   children: ReactNode;
 }) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // Tombol back Android (dan Esc) menutup sheet paling atas dulu, bukan meninggalkan halaman.
+    // CloseWatcher didukung Chrome Android; tanpa itu, cukup Esc.
+    const CW = (window as unknown as { CloseWatcher?: new () => CloseWatcherLike }).CloseWatcher;
+    if (CW) {
+      let watcher: CloseWatcherLike | null = null;
+      try {
+        watcher = new CW();
+        watcher.onclose = () => closeRef.current();
+      } catch {
+        watcher = null;
+      }
+      if (watcher) return () => watcher!.destroy();
+    }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open]);
   if (!open) return null;
   return createPortal(
     <div className="sheet-backdrop" onClick={onClose}>
