@@ -7,9 +7,9 @@ android {
         applicationId "id.alwaysysl.chatstory"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // Diisi dari package.json saat build (lihat scripts/android-version.mjs / workflow).
-        versionCode (project.findProperty('appVersionCode') ?: '1') as int
-        versionName (project.findProperty('appVersionName') ?: '1.0') as String
+        // Diisi dari package.json saat build (lihat .github/workflows/android.yml).
+        versionCode Integer.parseInt((project.findProperty('appVersionCode') ?: '1').toString())
+        versionName((project.findProperty('appVersionName') ?: '1.0').toString())
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
