@@ -5,6 +5,8 @@ import { formatPrice } from '../lib/pricing';
 import {
   defaultThinkingStyle,
   isValidBaseUrl,
+  markEdited,
+  presetKey,
   newCustomProvider,
   PROVIDER_INFO,
   usableModels,
@@ -13,7 +15,8 @@ import {
   type ProviderConfig,
   type ThinkingStyle,
 } from '../lib/providers';
-import { updateSettings, useSettings } from '../lib/settings';
+import { db } from '../db';
+import { getSettings, updateSettings, useSettings, type Settings } from '../lib/settings';
 import { uid } from '../lib/util';
 import { IconCheck, IconChevron, IconPlus, IconSettings } from './Icons';
 import { ConfirmSheet, Sheet, SheetItem, Toggle, toast } from './ui';
@@ -295,6 +298,7 @@ function ProviderEditor({ initial, isNew, onClose }: { initial: ProviderConfig; 
   const [confirmDel, setConfirmDel] = useState(false);
   const info = PROVIDER_INFO[p.kind];
   const set = (patch: Partial<ProviderConfig>) => setP((x) => ({ ...x, ...patch }));
+  const [removed, setRemoved] = useState<string[]>([]);
 
   useEffect(() => setResult(null), [p.apiKey, p.baseUrl]);
 
@@ -305,14 +309,24 @@ function ProviderEditor({ initial, isNew, onClose }: { initial: ProviderConfig; 
       return false;
     }
     const clean = { ...p, name: p.name.trim() || 'Penyedia lain', baseUrl: p.baseUrl.trim(), apiKey: p.apiKey.trim() };
-    const exists = s.providers.some((x) => x.id === p.id);
-    const providers = exists ? s.providers.map((x) => (x.id === p.id ? clean : x)) : [...s.providers, clean];
-    // Kalau model default belum bisa dipakai, jadikan model pertama penyedia ini default.
-    const def = providers.find((x) => x.id === s.defaultModel.provider);
-    const defOk = def?.apiKey && def.models.some((m) => m.id === s.defaultModel.model);
-    await updateSettings({
-      providers,
-      ...(!defOk && clean.apiKey && clean.models[0] ? { defaultModel: { provider: clean.id, model: clean.models[0].id } } : {}),
+    // Dibaca ulang di dalam transaksi supaya perubahan lain yang belum tampil di layar tidak tertimpa.
+    await db.transaction('rw', db.kv, async () => {
+      const cur = await getSettings();
+      const exists = cur.providers.some((x) => x.id === p.id);
+      const providers = exists ? cur.providers.map((x) => (x.id === p.id ? clean : x)) : [...cur.providers, clean];
+      // Kalau model default belum bisa dipakai, jadikan model pertama yang bisa dipakai sebagai default.
+      const def = providers.find((x) => x.id === cur.defaultModel.provider);
+      const defOk = def?.apiKey && def.models.some((m) => m.id === cur.defaultModel.model);
+      const first = providers.find((x) => x.apiKey && x.models.length);
+      await db.kv.put({
+        key: 'settings',
+        value: {
+          ...cur,
+          providers,
+          removedPresets: [...new Set([...cur.removedPresets, ...removed])],
+          ...(!defOk && first ? { defaultModel: { provider: first.id, model: first.models[0].id } } : {}),
+        } satisfies Settings,
+      });
     });
     if (close) {
       toast('Penyedia disimpan');
@@ -442,13 +456,21 @@ function ProviderEditor({ initial, isNew, onClose }: { initial: ProviderConfig; 
         <ModelEditor
           initial={editModel.model}
           onClose={() => setEditModel(null)}
-          onDelete={editModel.index >= 0 ? () => set({ models: p.models.filter((_, i) => i !== editModel.index) }) : undefined}
-          onSave={(m) =>
+          onDelete={
+            editModel.index >= 0
+              ? () => {
+                  setRemoved((r) => [...r, presetKey(p.id, p.models[editModel.index].id)]);
+                  set({ models: p.models.filter((_, i) => i !== editModel.index) });
+                }
+              : undefined
+          }
+          onSave={(m0) => {
+            const m = markEdited(p.id, m0);
             set({
               models:
                 editModel.index >= 0 ? p.models.map((x, i) => (i === editModel.index ? m : x)) : [...p.models, m],
-            })
-          }
+            });
+          }}
         />
       )}
       <ConfirmSheet
@@ -459,8 +481,10 @@ function ProviderEditor({ initial, isNew, onClose }: { initial: ProviderConfig; 
         danger
         onClose={() => setConfirmDel(false)}
         onConfirm={async () => {
-          if (!s) return;
-          await updateSettings({ providers: s.providers.filter((x) => x.id !== p.id) });
+          await db.transaction('rw', db.kv, async () => {
+            const cur = await getSettings();
+            await db.kv.put({ key: 'settings', value: { ...cur, providers: cur.providers.filter((x) => x.id !== p.id) } satisfies Settings });
+          });
           onClose();
         }}
       />

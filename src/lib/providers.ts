@@ -24,6 +24,11 @@ export interface ModelConfig {
   price: ModelPrice;
   /** batas konteks dalam token; 0/undefined = tidak diketahui */
   context?: number;
+  /**
+   * true = model bawaan aplikasi yang belum diubah pengguna; harga & batasnya ikut diperbarui saat aplikasi update.
+   * false = sudah diubah pengguna (atau buatan pengguna).
+   */
+  preset?: boolean;
 }
 
 export interface ProviderConfig {
@@ -216,16 +221,67 @@ export function isValidBaseUrl(url: string): boolean {
   }
 }
 
-/** Lengkapi data model lama dengan nilai bawaan yang belum ada (mis. batas konteks). */
-export function withPresetDefaults(providers: ProviderConfig[]): ProviderConfig[] {
-  const presets = new Map(presetProviders().flatMap((p) => p.models.map((m) => [`${p.id}::${m.id}`, m] as const)));
-  return providers.map((p) => ({
-    ...p,
-    models: p.models.map((m) => {
-      const pre = presets.get(`${p.id}::${m.id}`);
-      return m.context === undefined && pre?.context ? { ...m, context: pre.context } : m;
-    }),
-  }));
+export function presetKey(providerId: string, modelId: string): string {
+  return `${providerId}::${modelId}`;
+}
+
+const SYNC_FIELDS = ['label', 'vision', 'thinking', 'currency', 'price', 'context'] as const;
+
+function sameSettings(a: ModelConfig, b: ModelConfig): boolean {
+  return SYNC_FIELDS.every((k) => JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null));
+}
+
+/**
+ * Selaraskan daftar penyedia tersimpan dengan bawaan aplikasi versi ini:
+ * - penyedia bawaan yang belum ada ditambahkan;
+ * - model bawaan yang belum ada ditambahkan, kecuali yang pernah dihapus pengguna (`removed`);
+ * - model bawaan yang belum diubah pengguna diperbarui (harga, batas konteks, kemampuan).
+ * API key, base URL, dan model buatan pengguna tidak pernah disentuh.
+ */
+export function withPresetDefaults(providers: ProviderConfig[], removed: string[] = []): ProviderConfig[] {
+  const removedSet = new Set(removed);
+  const presets = presetProviders();
+  const out = providers.map((p) => {
+    const pre = presets.find((x) => x.id === p.id);
+    if (!pre) return p;
+    const models = p.models.map((m) => {
+      const pm = pre.models.find((x) => x.id === m.id);
+      if (!pm) return m;
+      // Data lama tanpa penanda: dianggap bawaan kalau harganya masih sama dengan harga bawaan.
+      const isPreset = m.preset ?? JSON.stringify(m.price) === JSON.stringify(pm.price);
+      if (!isPreset) return { ...m, preset: false, context: m.context ?? pm.context };
+      return { ...m, ...Object.fromEntries(SYNC_FIELDS.map((k) => [k, pm[k]])), preset: true } as ModelConfig;
+    });
+    for (const pm of pre.models) {
+      if (!models.some((m) => m.id === pm.id) && !removedSet.has(presetKey(p.id, pm.id))) models.push({ ...pm, preset: true });
+    }
+    return { ...p, models };
+  });
+  for (const pre of presets) {
+    if (!out.some((p) => p.id === pre.id)) out.push({ ...pre, models: pre.models.map((m) => ({ ...m, preset: true })) });
+  }
+  return out;
+}
+
+/** Tandai model sebagai diubah pengguna kalau pengaturannya berbeda dari bawaan. */
+export function markEdited(providerId: string, m: ModelConfig): ModelConfig {
+  const pm = presetProviders()
+    .find((p) => p.id === providerId)
+    ?.models.find((x) => x.id === m.id);
+  return { ...m, preset: !!pm && sameSettings(m, pm) };
+}
+
+/**
+ * Gabungkan penyedia di HP ini dengan penyedia dari backup: yang di HP ini tetap (beserta API key),
+ * penyedia yang hanya ada di backup ditambahkan tanpa API key.
+ */
+export function mergeProviderLists(local: ProviderConfig[], fromBackup: ProviderConfig[]): ProviderConfig[] {
+  const out = [...local];
+  for (const b of fromBackup) {
+    if (!b || typeof b.id !== 'string' || out.some((p) => p.id === b.id)) continue;
+    out.push({ ...b, apiKey: '' });
+  }
+  return out;
 }
 
 /** Perkiraan kasar jumlah token dari teks (bahasa Indonesia ±3,5 karakter per token). */

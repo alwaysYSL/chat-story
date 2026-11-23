@@ -101,19 +101,21 @@ export function downloadFile(name: string, content: Blob) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
-/** Bagikan file lewat menu share Android; kembali false kalau tidak didukung. */
-export async function shareFile(name: string, content: Blob, title: string): Promise<boolean> {
+export type ShareResult = 'shared' | 'canceled' | 'unsupported';
+
+/** Bagikan file lewat menu share Android. 'canceled' = pengguna menutup menu share tanpa memilih. */
+export async function shareFile(name: string, content: Blob, title: string): Promise<ShareResult> {
   const file = new File([content], name, { type: content.type || 'application/octet-stream' });
   const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
   if (nav.canShare && nav.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title });
-      return true;
+      return 'shared';
     } catch (e) {
-      if ((e as Error).name === 'AbortError') return true;
+      if ((e as Error).name === 'AbortError') return 'canceled';
     }
   }
-  return false;
+  return 'unsupported';
 }
 
 export async function copyText(text: string): Promise<boolean> {

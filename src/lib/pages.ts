@@ -53,14 +53,40 @@ export async function lastStoryPage(rootId: string): Promise<Page | undefined> {
 }
 
 export async function createChapter(rootId: string): Promise<Page> {
-  const chapters = await getChapters(rootId);
-  const all = await db.pages.where('parentId').equals(rootId).toArray();
-  const order = all.reduce((m, p) => Math.max(m, p.order), 0) + 1;
-  const page = makePage({ parentId: rootId, order, title: `Bagian ${chapters.length + 2}`, titleAuto: true });
-  await db.pages.add(page);
-  await db.pages.update(rootId, { updatedAt: Date.now() });
+  const page = await db.transaction('rw', db.pages, async () => {
+    const all = await db.pages.where('parentId').equals(rootId).toArray();
+    const alive = all.filter((p) => !p.deletedAt);
+    const order = all.reduce((m, p) => Math.max(m, p.order), 0) + 1;
+    // Nomor tidak dipakai ulang walaupun ada bab yang dihapus (termasuk yang masih di Sampah).
+    const maxNum = all.reduce((m, p) => {
+      const n = /^Bagian (\d+)$/.exec(p.title.trim());
+      return n ? Math.max(m, Number(n[1])) : m;
+    }, 1);
+    const num = Math.max(alive.length + 2, maxNum + 1);
+    const p = makePage({ parentId: rootId, order, title: `Bagian ${num}`, titleAuto: true });
+    await db.pages.add(p);
+    await db.pages.update(rootId, { updatedAt: Date.now() });
+    return p;
+  });
   markChanged();
   return page;
+}
+
+/**
+ * Hapus page yang dibuat lalu ditinggal tanpa diisi apa pun (✏️ Page baru / + Bab baru lalu kembali).
+ * Page tidak dihapus kalau sudah pernah diubah, punya bab, punya chat, atau sedang/pernah ditulis AI.
+ */
+export async function discardIfUntouched(id: string): Promise<boolean> {
+  const page = await db.pages.get(id);
+  if (!page || page.deletedAt || page.words > 0 || page.text.trim()) return false;
+  if (page.updatedAt !== page.createdAt || !page.titleAuto || page.title.trim() && !/^Bagian \d+$/.test(page.title)) return false;
+  if (!page.parentId) {
+    if ((await db.pages.where('parentId').equals(id).count()) > 0) return false;
+    if ((await db.chats.where('pageId').equals(id).count()) > 0) return false;
+  }
+  if (await db.messages.filter((m) => m.targetPageId === id || m.createdPageId === id).first()) return false;
+  await db.pages.delete(id);
+  return true;
 }
 
 export function rootIdOf(page: Page): string {
@@ -92,6 +118,8 @@ export async function updatePageDoc(id: string, fn: (doc: JSONContent) => JSONCo
 }
 
 export async function renamePage(id: string, title: string): Promise<void> {
+  const page = await db.pages.get(id);
+  if (!page || page.title === title) return;
   await db.pages.update(id, { title, titleAuto: false, updatedAt: Date.now() });
   markChanged();
 }

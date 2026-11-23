@@ -6,7 +6,10 @@ import type { JSONContent } from '@tiptap/react';
  * tebal, dan miring.
  *
  * Setiap blok di dokumen boleh punya atribut `seg` = id pesan AI yang menulisnya.
- * Blok tanpa `seg` (diketik manual) dianggap milik segmen di atasnya.
+ * - Untuk KONTEKS AI, blok tanpa `seg` (diketik penulis) ikut dibaca bersama balasan AI di atasnya
+ *   (`groupSegments`).
+ * - Untuk MENGUBAH naskah (coba lagi, batalkan, ganti versi), hanya blok yang benar-benar ditulis AI
+ *   (`seg` = id balasan) yang diganti; paragraf penulis tidak pernah ikut terhapus.
  */
 
 export type Block = JSONContent;
@@ -151,20 +154,17 @@ export function groupSegments(doc: JSONContent | undefined): SegmentGroups {
   return { leading, segs };
 }
 
-/** Indeks blok [start, end) milik segmen efektif `seg`. */
-function segmentRange(blocks: Block[], seg: string): [number, number] | null {
-  let start = -1;
-  let end = -1;
-  let cur: string | null = null;
+function segOf(b: Block): string | null {
+  return (b.attrs?.seg as string | null | undefined) ?? null;
+}
+
+/** Indeks blok yang ditulis oleh balasan `seg` (termasuk placeholder kosong). */
+function ownedIndices(blocks: Block[], seg: string): number[] {
+  const out: number[] = [];
   blocks.forEach((b, i) => {
-    const s = (b.attrs?.seg as string | null | undefined) ?? null;
-    if (s) cur = s;
-    if (cur === seg) {
-      if (start < 0) start = i;
-      end = i + 1;
-    }
+    if (segOf(b) === seg) out.push(i);
   });
-  return start < 0 ? null : [start, end];
+  return out;
 }
 
 function withoutTrailingEmpty(blocks: Block[]): Block[] {
@@ -183,11 +183,21 @@ export function appendBlocks(doc: JSONContent, add: Block[]): JSONContent {
   return { type: 'doc', content: content.length ? content : emptyDoc().content };
 }
 
+/**
+ * Ganti blok milik balasan `seg` dengan `next`. Blok baru diletakkan di posisi blok pertama milik balasan itu;
+ * paragraf penulis (tanpa `seg`) dan balasan lain tidak disentuh. Kalau balasan belum ada di naskah,
+ * blok ditambahkan di akhir.
+ */
 export function replaceSegment(doc: JSONContent, seg: string, next: Block[]): JSONContent {
   const blocks = docBlocks(doc);
-  const r = segmentRange(blocks, seg);
-  if (!r) return appendBlocks(doc, next);
-  const content = [...blocks.slice(0, r[0]), ...next, ...blocks.slice(r[1])];
+  const owned = ownedIndices(blocks, seg);
+  if (!owned.length) return appendBlocks(doc, next);
+  const ownedSet = new Set(owned);
+  const content: Block[] = [];
+  blocks.forEach((b, i) => {
+    if (i === owned[0]) content.push(...next);
+    if (!ownedSet.has(i)) content.push(b);
+  });
   return { type: 'doc', content: content.length ? content : emptyDoc().content };
 }
 
@@ -195,11 +205,41 @@ export function removeSegment(doc: JSONContent, seg: string): JSONContent {
   return replaceSegment(doc, seg, []);
 }
 
-export function segmentText(doc: JSONContent | undefined, seg: string): string | null {
-  const g = groupSegments(doc).segs.get(seg);
-  if (!g) return null;
-  const s = serializeBlocks(g.blocks);
+/** Penanda posisi selama balasan ditulis ulang, supaya tulisan baru kembali ke tempat yang sama. */
+export function placeholderBlock(seg: string): Block {
+  return { type: 'paragraph', attrs: { seg } };
+}
+
+/** Teks yang benar-benar ditulis AI untuk balasan `seg` (termasuk editan penulis di dalamnya). */
+export function ownedText(doc: JSONContent | undefined, seg: string): string | null {
+  const blocks = docBlocks(doc);
+  const s = serializeBlocks(ownedIndices(blocks, seg).map((i) => blocks[i]));
   return s.trim() ? s : null;
+}
+
+/** Ada balasan `seg` di naskah (walaupun hanya placeholder). */
+export function hasSegment(doc: JSONContent | undefined, seg: string): boolean {
+  return docBlocks(doc).some((b) => segOf(b) === seg);
+}
+
+/**
+ * Paragraf yang ditulis penulis sendiri setelah balasan `seg` mulai (sampai balasan AI lain dimulai).
+ * Dipakai saat menulis ulang supaya tulisan baru nyambung ke paragraf penulis.
+ */
+export function trailingManualText(doc: JSONContent | undefined, seg: string): string {
+  const out: Block[] = [];
+  let cur: string | null = null;
+  for (const b of docBlocks(doc)) {
+    const s = segOf(b);
+    if (s) cur = s;
+    if (cur === seg && s !== seg) out.push(b);
+  }
+  return serializeBlocks(out);
+}
+
+/** Hapus atribut `seg` dari blok (teks tempelan dianggap tulisan penulis). */
+export function stripSegments(blocks: Block[]): Block[] {
+  return blocks.map((b) => (segOf(b) ? { ...b, attrs: { ...b.attrs, seg: null } } : b));
 }
 
 /** Ganti id segmen (dipakai saat menduplikat cerita). */
@@ -216,8 +256,21 @@ export function remapSegments(doc: JSONContent, map: Map<string, string>): JSONC
 /* ---------- Pembersihan keluaran model ---------- */
 
 const TITLE_RE = /^\s*(?:#{1,6}\s*)?\**\s*(?:judul|title)\s*:\s*\**\s*(.+?)\s*\**\s*$/i;
-const PREAMBLE_RE =
-  /^(berikut|tentu|baik|oke|ok|siap|ini (dia|adalah)|here is|sure)\b.*(:|lanjutan|pembukaan|cerita)\W*$/i;
+const PREAMBLE_KEYWORD =
+  /\b(lanjutan|lanjutannya|pembukaan|pembukaannya|cerita|ceritanya|bab|versi|tulisan|naskah|bagian|adegan|continuation|story|chapter)\b/i;
+/** "Berikut lanjutannya:", "Here's the next part" */
+const PREAMBLE_LEAD = /^(berikut|here(?:'s| is))\b/i;
+/** "Tentu! …:", "Baik, …:", "Oke. …:" — kata sapaan langsung diikuti tanda baca */
+const PREAMBLE_ACK = /^(tentu|baik|oke|ok|siap|sure|certainly|of course)[!,.]/i;
+
+/** Baris pertama yang jelas komentar AI, bukan bagian cerita. */
+export function isPreamble(line: string): boolean {
+  const l = line.trim();
+  if (!l || l.length > 160) return false;
+  if (PREAMBLE_LEAD.test(l)) return PREAMBLE_KEYWORD.test(l);
+  if (PREAMBLE_ACK.test(l)) return PREAMBLE_KEYWORD.test(l) && /:\s*\**$/.test(l);
+  return false;
+}
 
 export interface CleanResult {
   title: string | null;
@@ -226,39 +279,70 @@ export interface CleanResult {
   pending: boolean;
 }
 
+function splitFirstLine(text: string): [string, string | null] {
+  const nl = text.indexOf('\n');
+  return nl < 0 ? [text, null] : [text.slice(0, nl), text.slice(nl + 1)];
+}
+
 /**
- * Pisahkan judul (kalau diminta) dan buang kalimat pembuka seperti "Berikut lanjutannya:".
- * `final` = false selama streaming: baris pertama yang belum selesai ditahan dulu.
+ * Buang kalimat pembuka seperti "Berikut lanjutannya:" lalu pisahkan judul (kalau diminta).
+ * Baris kosong di awal diabaikan. `final` = false selama streaming: baris yang belum selesai ditahan dulu.
  */
 export function cleanOutput(raw: string, expectTitle: boolean, final: boolean): CleanResult {
-  let text = raw.replace(/\r/g, '');
+  let text = raw.replace(/\r/g, '').replace(/^\s+/, '');
   let title: string | null = null;
-  const firstNl = text.indexOf('\n');
-  const firstLine = (firstNl < 0 ? text : text.slice(0, firstNl)).trim();
-
-  if (!final && firstNl < 0 && firstLine.length < 160) {
-    // Baris pertama belum selesai; bisa jadi judul atau kalimat pembuka.
-    return { title: null, body: '', pending: true };
-  }
-
-  if (expectTitle) {
-    const m = firstLine.match(TITLE_RE);
-    const h = firstLine.match(/^#{1,6}\s+(.+)$/);
-    if (m) {
-      title = m[1].replace(/\*+/g, '').replace(/^["“]|["”]$/g, '').trim();
-      text = firstNl < 0 ? '' : text.slice(firstNl + 1);
-    } else if (h) {
-      title = h[1].replace(/\*+/g, '').trim();
-      text = firstNl < 0 ? '' : text.slice(firstNl + 1);
+  // Maksimal satu kalimat pembuka, lalu judul.
+  for (let step = 0; step < 2; step++) {
+    const [line, rest] = splitFirstLine(text);
+    if (!final && rest === null && line.length < 160) return { title: null, body: '', pending: true };
+    if (step === 0 && isPreamble(line)) {
+      text = (rest ?? '').replace(/^\s+/, '');
+      continue;
     }
+    if (expectTitle) {
+      const m = line.trim().match(TITLE_RE);
+      const h = line.trim().match(/^#{1,6}\s+(.+)$/);
+      if (m) {
+        title = m[1].replace(/\*+/g, '').replace(/^["“]|["”]$/g, '').trim();
+        text = (rest ?? '').replace(/^\s+/, '');
+      } else if (h) {
+        title = h[1].replace(/\*+/g, '').trim();
+        text = (rest ?? '').replace(/^\s+/, '');
+      }
+    }
+    break;
   }
+  return { title, body: text, pending: false };
+}
 
-  const trimmed = text.replace(/^\s+/, '');
-  const nl = trimmed.indexOf('\n');
-  const line = (nl < 0 ? trimmed : trimmed.slice(0, nl)).trim();
-  if (line.length <= 140 && PREAMBLE_RE.test(line)) {
-    text = nl < 0 ? '' : trimmed.slice(nl + 1);
-  }
+/** Isi naskah dari sebuah versi. Versi yang sudah bersih (hasil editan penulis) tidak dibersihkan ulang. */
+export function versionBody(v: { raw: string; clean?: boolean }, expectTitle: boolean): string {
+  return v.clean ? v.raw : cleanOutput(v.raw, expectTitle, true).body;
+}
 
-  return { title, body: text.replace(/^\s+/, ''), pending: false };
+/* ---------- HTML sederhana (untuk tulisan AI yang sedang mengalir) ---------- */
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function inlineHtml(nodes: JSONContent[] | undefined): string {
+  return (nodes ?? [])
+    .map((n) => {
+      let h = escapeHtml(n.text ?? '');
+      if (n.marks?.some((m) => m.type === 'italic')) h = `<em>${h}</em>`;
+      if (n.marks?.some((m) => m.type === 'bold')) h = `<strong>${h}</strong>`;
+      return h;
+    })
+    .join('');
+}
+
+export function blocksToHtml(blocks: Block[]): string {
+  return blocks
+    .map((b) => {
+      if (b.type === 'horizontalRule') return '<hr>';
+      if (b.type === 'heading') return `<h2>${inlineHtml(b.content)}</h2>`;
+      return `<p>${inlineHtml(b.content)}</p>`;
+    })
+    .join('');
 }

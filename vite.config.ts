@@ -54,7 +54,7 @@ export default defineConfig({
       manifest: {
         name: 'Chat Story',
         short_name: 'Chat Story',
-        description: 'Menulis cerita bersama AI DeepSeek',
+        description: 'Menulis cerita bersama AI',
         lang: 'id',
         start_url: '/chat-story/',
         scope: '/chat-story/',
@@ -71,8 +71,6 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
         navigateFallback: 'index.html',
-        // Jangan pernah meng-cache panggilan ke API DeepSeek.
-        navigateFallbackDenylist: [/^\/api/],
       },
     }),
   ],

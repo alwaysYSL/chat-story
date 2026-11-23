@@ -4,7 +4,7 @@ import { IconSparkle } from '../components/Icons';
 import { toast } from '../components/ui';
 import { testProvider } from '../lib/api';
 import { PROVIDER_INFO } from '../lib/providers';
-import { updateSettings, useSettings } from '../lib/settings';
+import { updateProvider, updateSettings, useSettings } from '../lib/settings';
 
 export default function Onboarding() {
   const nav = useNavigate();
@@ -33,16 +33,20 @@ export default function Onboarding() {
     if (finishing && s?.onboarded) nav('/', { replace: true });
   }, [finishing, s?.onboarded, nav]);
 
+  /** Simpan API key yang diketik walaupun tes koneksi gagal atau dilewati. */
+  const saveKey = async () => {
+    const k = key.trim();
+    if (!k || !provider) return;
+    await updateProvider(provider.id, (p) => ({ ...p, apiKey: k }));
+    if (provider.models[0]) await updateSettings({ defaultModel: { provider: provider.id, model: provider.models[0].id } });
+  };
+
   const test = async () => {
     if (!key.trim() || !s || !provider) return;
     setTesting(true);
     try {
-      const next = { ...provider, apiKey: key.trim() };
-      const r = await testProvider(next);
-      await updateSettings({
-        providers: s.providers.map((p) => (p.id === next.id ? next : p)),
-        defaultModel: { provider: next.id, model: next.models[0].id },
-      });
+      await saveKey();
+      const r = await testProvider({ ...provider, apiKey: key.trim() });
       setBalance(r.text);
     } catch (e) {
       toast((e as Error).message);
@@ -118,7 +122,13 @@ export default function Onboarding() {
             </button>
             {balance && <p className="note ok">{balance}</p>}
             <div className="row-buttons">
-              <button className="btn" onClick={() => setStep(2)}>
+              <button
+                className="btn"
+                onClick={async () => {
+                  await saveKey();
+                  setStep(2);
+                }}
+              >
                 {balance ? 'Lanjut' : 'Lewati dulu'}
               </button>
             </div>

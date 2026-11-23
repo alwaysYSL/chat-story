@@ -3,10 +3,29 @@ import { db, type Attachment, type Chat, type ChatKind, type LengthPreset, type 
 import { buildContext, getBrief, mergeSameRole, messageContent } from './context';
 import { ApiError, streamChat, type ApiMessage } from './api';
 import { flushEditors } from './editors';
-import { cleanOutput, parseMarkdown, removeSegment, replaceSegment, segmentText, serializeBlocks } from './markdown';
+import {
+  cleanOutput,
+  ownedText,
+  parseMarkdown,
+  placeholderBlock,
+  removeSegment,
+  replaceSegment,
+  serializeBlocks,
+  trailingManualText,
+  versionBody,
+} from './markdown';
 import { createChapter, createStory, getStoryPages, savePageDoc, trashChapter } from './pages';
 import { costUsd, isPeak } from './pricing';
-import { chapterStartNote, continueInstr, DISCUSS_INSTR, effectiveReminder, maxTokensFor, openingInstr, reminderBlock } from './prompts';
+import {
+  afterTextBlock,
+  chapterStartNote,
+  continueInstr,
+  DISCUSS_INSTR,
+  effectiveReminder,
+  maxTokensFor,
+  openingInstr,
+  reminderBlock,
+} from './prompts';
 import { findModel, PROVIDER_INFO, type ModelRef } from './providers';
 import { getSettings, markChanged, temperatureFor, type Settings } from './settings';
 import { countWords, firstWords, uid } from './util';
@@ -45,8 +64,24 @@ export function useActiveGen(): ActiveGen | null {
   );
 }
 
+/**
+ * Kunci operasi: dipasang SEBELUM await pertama, supaya ketukan ganda (Coba lagi dua kali, kirim lalu
+ * ganti versi) tidak menjalankan dua permintaan sekaligus.
+ */
+let starting = false;
+
 export function isBusy() {
-  return active !== null;
+  return active !== null || starting;
+}
+
+async function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+  if (active || starting) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
+  starting = true;
+  try {
+    return await fn();
+  } finally {
+    starting = false;
+  }
 }
 
 export function stopGeneration() {
@@ -65,15 +100,27 @@ export class UserError extends Error {
 
 let wakeLock: WakeLockSentinel | null = null;
 async function acquireWakeLock() {
+  if (!('wakeLock' in navigator) || wakeLock) return;
   try {
-    if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+    const lock = await navigator.wakeLock.request('screen');
+    // Browser melepas kunci sendiri saat aplikasi disembunyikan; catat supaya bisa diminta lagi.
+    lock.addEventListener('release', () => {
+      if (wakeLock === lock) wakeLock = null;
+    });
+    if (!active) {
+      // Permintaan AI sudah selesai sebelum kunci didapat.
+      void lock.release().catch(() => {});
+      return;
+    }
+    wakeLock = lock;
   } catch {
     wakeLock = null;
   }
 }
 function releaseWakeLock() {
-  void wakeLock?.release().catch(() => {});
+  const lock = wakeLock;
   wakeLock = null;
+  void lock?.release().catch(() => {});
 }
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && active && !wakeLock) void acquireWakeLock();
@@ -139,13 +186,16 @@ function baseMessage(p: Partial<Message> & Pick<Message, 'chatId' | 'seq' | 'rol
   };
 }
 
-export async function sendMessage(o: SendOptions): Promise<SendResult> {
+export function sendMessage(o: SendOptions): Promise<SendResult> {
+  return exclusive(() => doSend(o));
+}
+
+async function doSend(o: SendOptions): Promise<SendResult> {
   const s = await getSettings();
   const resolved = findModel(s.providers, o.model);
   if (!resolved || !resolved.provider.apiKey.trim()) {
     throw new UserError('nokey', 'Pilih model dan isi API key penyedianya dulu di Pengaturan → Penyedia AI.');
   }
-  if (active) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
   await flushEditors();
 
   const now = Date.now();
@@ -278,9 +328,11 @@ interface RunArgs {
   kind: 'new' | 'retry' | 'append';
   /** untuk 'append': teks segmen yang sudah ada (jadi awalan prefix completion) */
   prefixText?: string;
+  /** status balasan sebelum ditulis ulang / disambung, untuk dikembalikan kalau gagal */
+  prevStatus?: Message['status'];
 }
 
-async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs): Promise<void> {
+async function run({ chat, user, asst, settings: s, kind, prefixText, prevStatus }: RunArgs): Promise<void> {
   const resolved = findModel(s.providers, { provider: user.provider ?? 'deepseek', model: user.model });
   const usePrefix = kind === 'append' && !!resolved && PROVIDER_INFO[resolved.provider.kind].prefix;
   const thinking = kind === 'append' ? false : user.thinking;
@@ -303,6 +355,7 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
   let raw = '';
   let lastSave = Date.now();
   let titleSet = false;
+  const appendBase = kind === 'append' && asst.versions[asst.active] ? versionBody(asst.versions[asst.active], asst.expectTitle) : '';
 
   const onDelta = (d: string, k: 'content' | 'reasoning') => {
     if (!active) return;
@@ -322,9 +375,10 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
       });
     }
     setActive({ ...active, live: c.body, words: countWords(c.body), thinking: false });
-    if (kind !== 'append' && Date.now() - lastSave > 2000) {
+    if (Date.now() - lastSave > 2000) {
       lastSave = Date.now();
-      void db.messages.update(asst.id, { text: raw });
+      // Disimpan berkala supaya tulisan tidak hilang kalau aplikasi tertutup (lihat recoverInterrupted).
+      void db.messages.update(asst.id, { text: kind === 'append' ? joinAppend(appendBase, raw, usePrefix) : raw });
     }
   };
 
@@ -341,7 +395,7 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
     const vision = resolved.model.vision;
     const ctx = await buildContext(chat, vision, user.seq);
     const omitted = { n: ctx.imagesOmitted };
-    const extras = write && kind !== 'append' ? await requestExtras(chat, user, asst) : [];
+    const extras = write ? await requestExtras(chat, user, asst, kind) : [];
     let current = await messageContent(user, vision, omitted);
     if (extras.length) {
       const add = extras.join('\n\n');
@@ -375,7 +429,10 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
     );
     raw = r.content;
     usage = r.usage;
-    if (r.finishReason === 'length') status = 'stopped';
+    if (r.finishReason === 'length') {
+      status = 'stopped';
+      if (!raw.trim()) error = 'Batas token habis sebelum ada teks (kemungkinan terpakai untuk berpikir). Coba lagi dengan mode berpikir mati.';
+    }
   } catch (e) {
     const err = e as ApiError & { partial?: string; usage?: typeof usage };
     if (err.partial !== undefined && err.partial.length >= raw.length) raw = err.partial;
@@ -392,9 +449,12 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
 
   const c = resolved ? costUsd(resolved.provider, resolved.model, usage, peak, s.usdToIdr) : 0;
   const cost = c ?? 0;
-  if (c === null && (usage.out > 0 || usage.miss > 0)) void db.messages.update(asst.id, { costUnknown: true });
+  const noUsage = usage.out === 0 && usage.miss === 0 && usage.hit === 0;
+  // Harga model tidak diketahui, atau permintaan berhenti sebelum penyedia mengirim jumlah token.
+  const unknown = (c === null && !noUsage) || (noUsage && status !== 'done' && (raw.trim().length > 0 || status === 'stopped'));
+  if (unknown) void db.messages.update(asst.id, { costUnknown: true });
   try {
-    await finish({ chat, user, asst, kind, raw, usage, cost, status, error, prefixText });
+    await finish({ chat, user, asst, kind, raw, usage, cost, status, error, usePrefix, appendBase, prevStatus });
   } finally {
     controller = null;
     releaseWakeLock();
@@ -408,7 +468,7 @@ async function run({ chat, user, asst, settings: s, kind, prefixText }: RunArgs)
  * - pengingat aturan penulis (author's note), kecuali untuk pembukaan;
  * - catatan "awal bab" kalau AI menulis di bab yang masih kosong.
  */
-async function requestExtras(chat: Chat, user: Message, asst: Message): Promise<string[]> {
+async function requestExtras(chat: Chat, user: Message, asst: Message, kind: RunArgs['kind']): Promise<string[]> {
   const out: string[] = [];
   const page = asst.targetPageId ? await db.pages.get(asst.targetPageId) : undefined;
   if (page?.parentId && !page.text.trim() && !/bab baru/i.test(user.instr)) out.push(chapterStartNote(page.title || 'Tanpa judul'));
@@ -418,7 +478,19 @@ async function requestExtras(chat: Chat, user: Message, asst: Message): Promise<
     const r = effectiveReminder(fresh.reminder, brief?.text);
     if (r.text) out.push(reminderBlock(r.text));
   }
+  // Menulis ulang / menyambung: paragraf penulis di bawah balasan ini ikut dibaca supaya nyambung.
+  if (page && kind !== 'new') {
+    const after = trailingManualText(page.doc, asst.id);
+    if (after.trim()) out.push(afterTextBlock(after));
+  }
   return out;
+}
+
+/** Gabungkan teks yang sudah ada dengan sambungannya. Prefix completion menyambung persis dari karakter terakhir. */
+function joinAppend(base: string, cont: string, usePrefix: boolean): string {
+  if (usePrefix || !base || !cont) return base + cont;
+  const needsSpace = !/\s$/.test(base) && !/^[\s.,;:!?…)"”'’-]/.test(cont);
+  return base + (needsSpace ? ' ' : '') + cont;
 }
 
 interface FinishArgs {
@@ -431,22 +503,88 @@ interface FinishArgs {
   cost: number;
   status: Message['status'];
   error: string | null;
-  prefixText?: string;
+  usePrefix: boolean;
+  appendBase: string;
+  prevStatus?: Message['status'];
+}
+
+function keepVersions(list: Version[], active: number): Version[] {
+  const versions = [...list];
+  while (versions.length >= 3) versions.splice(versions.findIndex((_, i) => i !== active), 1);
+  return versions;
 }
 
 async function finish(f: FinishArgs): Promise<void> {
   const { chat, user, asst, kind, usage, cost, error } = f;
-  let { status, raw } = f;
+  let { status } = f;
+  const raw = f.raw;
   const cur = (await db.messages.get(asst.id)) ?? asst;
   const hasText = raw.trim().length > 0;
   if (status === 'error' && hasText) status = 'interrupted';
+  const restored = f.prevStatus && f.prevStatus !== 'streaming' ? f.prevStatus : 'done';
 
+  /* ----- Diskusi ----- */
   if (user.mode === 'discuss') {
+    if (!hasText) {
+      if (kind === 'retry' && cur.versions.length) {
+        // Jawaban lama tetap dipakai.
+        await db.messages.update(asst.id, {
+          text: cur.versions[cur.active].raw,
+          status: restored,
+          error: error ?? 'Tidak ada jawaban.',
+          costUsd: cur.costUsd + cost,
+        });
+      } else {
+        await db.messages.update(asst.id, {
+          text: '',
+          status: status === 'stopped' ? 'stopped' : 'error',
+          error: error ?? (status === 'stopped' ? 'Dihentikan sebelum ada jawaban.' : 'Tidak ada jawaban.'),
+          costUsd: cur.costUsd + cost,
+        });
+      }
+    } else {
+      const version: Version = { raw, ser: '', words: countWords(raw), usage, costUsd: cost };
+      const versions = kind === 'retry' ? [...keepVersions(cur.versions, cur.active), version] : [version];
+      await db.messages.update(asst.id, {
+        text: raw,
+        versions,
+        active: versions.length - 1,
+        status,
+        error: status === 'done' || status === 'stopped' ? null : error,
+        costUsd: cur.costUsd + cost,
+      });
+    }
+    await db.chats.update(chat.id, { updatedAt: Date.now() });
+    markChanged();
+    return;
+  }
+
+  const pageId = asst.targetPageId!;
+
+  /* ----- Lanjutkan dari sini ----- */
+  if (kind === 'append') {
+    const versions = [...cur.versions];
+    const v = versions[cur.active];
+    if (hasText && v) {
+      const cont = f.usePrefix ? raw : cleanOutput(raw, false, true).body;
+      const body = joinAppend(f.appendBase, cont, f.usePrefix);
+      const blocks = parseMarkdown(body, asst.id);
+      versions[cur.active] = {
+        raw: body,
+        ser: serializeBlocks(blocks),
+        words: countWords(body),
+        clean: true,
+        usage: { hit: v.usage.hit + usage.hit, miss: v.usage.miss + usage.miss, out: v.usage.out + usage.out },
+        costUsd: v.costUsd + cost,
+      };
+      const page = await db.pages.get(pageId);
+      if (page) await savePageDoc(pageId, replaceSegment(page.doc, asst.id, blocks), true);
+    }
     await db.messages.update(asst.id, {
-      text: raw,
-      status: hasText ? (status === 'error' ? 'interrupted' : status) : 'error',
-      error: hasText && status === 'done' ? null : (error ?? (hasText ? null : 'Tidak ada jawaban.')),
-      versions: [{ raw, ser: '', words: countWords(raw), usage, costUsd: cost }],
+      text: '',
+      versions,
+      status: hasText ? status : restored,
+      error: hasText ? (status === 'done' || status === 'stopped' ? null : error) : (error ?? 'Dihentikan sebelum ada teks.'),
       costUsd: cur.costUsd + cost,
     });
     await db.chats.update(chat.id, { updatedAt: Date.now() });
@@ -454,56 +592,27 @@ async function finish(f: FinishArgs): Promise<void> {
     return;
   }
 
-  const pageId = asst.targetPageId!;
-  const page = await db.pages.get(pageId);
-
-  if (kind === 'append') {
-    const prefix = f.prefixText ?? '';
-    const needsSpace = prefix && raw && !/\s$/.test(prefix) && !/^[\s.,;:!?…)"”'’-]/.test(raw);
-    const full = prefix + (needsSpace ? ' ' : '') + raw;
-    const versions = [...cur.versions];
-    const v = versions[cur.active];
-    const c = cleanOutput(full, cur.expectTitle, true);
-    const blocks = parseMarkdown(c.body, asst.id);
-    const ser = serializeBlocks(blocks);
-    if (v) {
-      versions[cur.active] = {
-        raw: full,
-        ser,
-        words: countWords(c.body),
-        usage: { hit: v.usage.hit + usage.hit, miss: v.usage.miss + usage.miss, out: v.usage.out + usage.out },
-        costUsd: v.costUsd + cost,
-      };
-    }
-    if (page && hasText) await savePageDoc(pageId, replaceSegment(page.doc, asst.id, blocks), true);
-    await db.messages.update(asst.id, {
-      versions,
-      status: status === 'error' ? cur.status : status,
-      error: status === 'done' || status === 'stopped' ? null : error,
-      costUsd: cur.costUsd + cost,
-    });
-    await db.chats.update(chat.id, { updatedAt: Date.now() });
-    return;
-  }
-
+  /* ----- Gagal tanpa teks sama sekali ----- */
   if (!hasText) {
-    // Gagal tanpa teks sama sekali.
+    const page = await db.pages.get(pageId);
     if (kind === 'retry' && cur.versions.length) {
-      // Kembalikan versi aktif sebelumnya ke naskah.
+      // Kembalikan versi aktif sebelumnya ke naskah (ke posisi placeholder).
       const v = cur.versions[cur.active];
-      const c = cleanOutput(v.raw, cur.expectTitle, true);
-      if (page) await savePageDoc(pageId, replaceSegment(page.doc, asst.id, parseMarkdown(c.body, asst.id)), true);
-      await db.messages.update(asst.id, { status: 'done', error, costUsd: cur.costUsd + cost });
+      if (page) await savePageDoc(pageId, replaceSegment(page.doc, asst.id, parseMarkdown(versionBody(v, cur.expectTitle), asst.id)), true);
+      await db.messages.update(asst.id, { text: '', status: restored, error: error ?? 'Dihentikan sebelum ada teks.', costUsd: cur.costUsd + cost });
     } else {
+      if (page) await savePageDoc(pageId, removeSegment(page.doc, asst.id), true);
       await db.messages.update(asst.id, {
+        text: '',
         status: status === 'stopped' ? 'stopped' : 'error',
-        error: status === 'stopped' ? 'Dihentikan sebelum ada teks.' : error,
+        error: error ?? (status === 'stopped' ? 'Dihentikan sebelum ada teks.' : 'Tidak ada teks.'),
         costUsd: cur.costUsd + cost,
       });
     }
     return;
   }
 
+  /* ----- Berhasil ----- */
   const c = cleanOutput(raw, cur.expectTitle, true);
   const blocks = parseMarkdown(c.body, asst.id);
   const version: Version = {
@@ -513,20 +622,7 @@ async function finish(f: FinishArgs): Promise<void> {
     usage,
     costUsd: cost,
   };
-  let versions = [...cur.versions];
-  let activeIdx: number;
-  if (kind === 'retry') {
-    if (versions.length >= 3) {
-      // Buang versi tertua yang tidak aktif.
-      const drop = versions.findIndex((_, i) => i !== cur.active);
-      versions.splice(drop, 1);
-    }
-    versions.push(version);
-    activeIdx = versions.length - 1;
-  } else {
-    versions = [version];
-    activeIdx = 0;
-  }
+  const versions = kind === 'retry' ? [...keepVersions(cur.versions, cur.active), version] : [version];
 
   if (c.title && chat.pageId) {
     const root = await db.pages.get(chat.pageId);
@@ -538,7 +634,7 @@ async function finish(f: FinishArgs): Promise<void> {
   await db.messages.update(asst.id, {
     text: '',
     versions,
-    active: activeIdx,
+    active: versions.length - 1,
     status,
     error: status === 'done' || status === 'stopped' ? null : error,
     costUsd: cur.costUsd + cost,
@@ -567,8 +663,8 @@ async function captureEdits(asst: Message): Promise<Version[]> {
   const v = versions[asst.active];
   if (!v || !asst.targetPageId) return versions;
   const page = await db.pages.get(asst.targetPageId);
-  const cur = page ? segmentText(page.doc, asst.id) : null;
-  if (cur !== null && cur !== v.ser) versions[asst.active] = { ...v, raw: cur, ser: cur, words: countWords(cur) };
+  const cur = page ? ownedText(page.doc, asst.id) : null;
+  if (cur !== null && cur !== v.ser) versions[asst.active] = { ...v, raw: cur, ser: cur, words: countWords(cur), clean: true };
   return versions;
 }
 
@@ -591,91 +687,108 @@ async function applyModel(s: Settings, user: Message, asst: Message, o: RetryOpt
   return [{ ...user, ...patch }, { ...asst, ...patch }];
 }
 
-export async function retryMessage(asstId: string, newText?: string, opts: RetryOptions = {}): Promise<void> {
-  const s = await getSettings();
-  if (active) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
-  await flushEditors();
-  const p = await pairOf(asstId);
-  if (!p) return;
-  const chat = p.chat;
-  let [user, asst] = await applyModel(s, p.user, p.asst, opts);
-  if (newText !== undefined) {
-    const s2 = await getSettings();
-    let instr = user.instr;
-    if (user.mode === 'write' && user.length && user.length !== 'opening') {
-      const isNewChapter = !!asst.createdPageId && asst.createdPageId !== chat.pageId;
-      const ch = isNewChapter ? await db.pages.get(asst.createdPageId!) : undefined;
-      instr = continueInstr(s2, user.length, { hasDirection: !!newText.trim(), newChapterTitle: ch?.title ?? null });
+export function retryMessage(asstId: string, newText?: string, opts: RetryOptions = {}): Promise<void> {
+  return exclusive(async () => {
+    const s = await getSettings();
+    await flushEditors();
+    const p = await pairOf(asstId);
+    if (!p) return;
+    const chat = p.chat;
+    const [u0, asst] = await applyModel(s, p.user, p.asst, opts);
+    let user = u0;
+    if (newText !== undefined) {
+      let instr = user.instr;
+      if (user.mode === 'write' && user.length && user.length !== 'opening') {
+        const isNewChapter = !!asst.createdPageId && asst.createdPageId !== chat.pageId;
+        const ch = isNewChapter ? await db.pages.get(asst.createdPageId!) : undefined;
+        instr = continueInstr(s, user.length, { hasDirection: !!newText.trim(), newChapterTitle: ch?.title ?? null });
+      }
+      user = { ...user, text: newText.trim(), instr };
+      await db.messages.update(user.id, { text: user.text, instr });
     }
-    user = { ...user, text: newText.trim(), instr };
-    await db.messages.update(user.id, { text: user.text, instr });
-  }
+    const prevStatus = asst.status;
 
-  if (user.mode === 'write') {
-    const versions = await captureEdits(asst);
-    await db.messages.update(asst.id, { versions, status: 'streaming', error: null });
+    if (user.mode === 'write') {
+      const versions = await captureEdits(asst);
+      await db.messages.update(asst.id, { versions, status: 'streaming', error: null, text: '' });
+      if (asst.targetPageId) {
+        // Tulisan AI diganti penanda posisi; paragraf penulis di bawahnya tetap di tempat.
+        const page = await db.pages.get(asst.targetPageId);
+        if (page) await savePageDoc(page.id, replaceSegment(page.doc, asst.id, [placeholderBlock(asst.id)]), true);
+      }
+      void run({ chat, user, asst: { ...asst, versions }, settings: s, kind: 'retry', prevStatus });
+    } else {
+      // Jawaban lama disimpan sebagai versi, supaya tidak hilang kalau percobaan baru gagal.
+      const versions = asst.versions.length
+        ? asst.versions
+        : asst.text.trim()
+          ? [{ raw: asst.text, ser: '', words: countWords(asst.text), usage: { hit: 0, miss: 0, out: 0 }, costUsd: 0 }]
+          : [];
+      await db.messages.update(asst.id, { versions, active: Math.max(0, versions.length - 1), status: 'streaming', error: null });
+      void run({ chat, user, asst: { ...asst, versions, active: Math.max(0, versions.length - 1) }, settings: s, kind: 'retry', prevStatus });
+    }
+  });
+}
+
+/** Lanjutkan balasan yang terputus/dihentikan dari kalimat terakhir. */
+export function continueMessage(asstId: string, opts: RetryOptions = {}): Promise<void> {
+  return exclusive(async () => {
+    const s = await getSettings();
+    await flushEditors();
+    const found = await pairOf(asstId);
+    if (!found || found.user.mode !== 'write' || !found.asst.targetPageId) return;
+    const [u2, a2] = await applyModel(s, found.user, found.asst, opts);
+    const versions = await captureEdits(a2);
+    const v = versions[a2.active];
+    if (!v) return;
+    const prevStatus = a2.status;
+    await db.messages.update(asstId, { versions, status: 'streaming' });
+    // captureEdits sudah mengganti raw dengan isi naskah kalau pengguna mengedit segmen ini.
+    void run({ chat: found.chat, user: u2, asst: { ...a2, versions }, settings: s, kind: 'append', prefixText: v.raw, prevStatus });
+  });
+}
+
+export function cancelMessage(asstId: string): Promise<void> {
+  return exclusive(async () => {
+    await flushEditors();
+    const p = await pairOf(asstId);
+    if (!p) return;
+    const { asst, user } = p;
     if (asst.targetPageId) {
       const page = await db.pages.get(asst.targetPageId);
-      if (page) await savePageDoc(page.id, removeSegment(page.doc, asst.id), true);
-    }
-    void run({ chat, user, asst: { ...asst, versions }, settings: s, kind: 'retry' });
-  } else {
-    await db.messages.update(asst.id, { status: 'streaming', error: null, text: '' });
-    void run({ chat, user, asst, settings: s, kind: 'new' });
-  }
-}
-
-/** Lanjutkan balasan yang terputus/dihentikan dari kalimat terakhir (Chat Prefix Completion). */
-export async function continueMessage(asstId: string, opts: RetryOptions = {}): Promise<void> {
-  const s = await getSettings();
-  if (active) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
-  await flushEditors();
-  const found = await pairOf(asstId);
-  if (!found || found.user.mode !== 'write' || !found.asst.targetPageId) return;
-  const [u2, a2] = await applyModel(s, found.user, found.asst, opts);
-  const p = { ...found, user: u2, asst: a2 };
-  const versions = await captureEdits(p.asst);
-  const v = versions[p.asst.active];
-  if (!v) return;
-  await db.messages.update(asstId, { versions, status: 'streaming' });
-  // captureEdits sudah mengganti raw dengan isi naskah kalau pengguna mengedit segmen ini.
-  const prefixText = v.raw;
-  void run({ ...p, asst: { ...p.asst, versions }, settings: s, kind: 'append', prefixText });
-}
-
-export async function cancelMessage(asstId: string): Promise<void> {
-  if (active?.messageId === asstId) return;
-  const p = await pairOf(asstId);
-  if (!p) return;
-  const { asst, user } = p;
-  if (asst.targetPageId) {
-    const page = await db.pages.get(asst.targetPageId);
-    if (page) {
-      const doc = removeSegment(page.doc, asst.id);
-      await savePageDoc(page.id, doc, true);
-      // Bab baru yang dibuat oleh balasan ini dan sekarang kosong ikut dibuang ke Sampah.
-      if (asst.createdPageId === page.id && page.parentId) {
-        const after = await db.pages.get(page.id);
-        if (after && !after.text.trim()) await trashChapter(page.id);
+      if (page) {
+        // Hanya tulisan AI yang dihapus; paragraf penulis tetap ada.
+        await savePageDoc(page.id, removeSegment(page.doc, asst.id), true);
+        // Bab baru yang dibuat oleh balasan ini dan sekarang kosong ikut dibuang ke Sampah.
+        if (asst.createdPageId === page.id && page.parentId) {
+          const after = await db.pages.get(page.id);
+          if (after && !after.text.trim()) await trashChapter(page.id);
+        }
       }
     }
-  }
-  await db.messages.update(asst.id, { status: 'canceled' });
-  await db.messages.update(user.id, { status: 'canceled' });
-  markChanged();
+    await db.messages.update(asst.id, { status: 'canceled' });
+    await db.messages.update(user.id, { status: 'canceled' });
+    markChanged();
+  });
 }
 
-export async function selectVersion(asstId: string, idx: number): Promise<void> {
-  if (active) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai.');
-  await flushEditors();
-  const asst = await db.messages.get(asstId);
-  if (!asst || idx < 0 || idx >= asst.versions.length || idx === asst.active || !asst.targetPageId) return;
-  const versions = await captureEdits(asst);
-  const v = versions[idx];
-  const c = cleanOutput(v.raw, asst.expectTitle, true);
-  const page = await db.pages.get(asst.targetPageId);
-  if (page) await savePageDoc(page.id, replaceSegment(page.doc, asst.id, parseMarkdown(c.body, asst.id)), true);
-  await db.messages.update(asst.id, { versions, active: idx });
+export function selectVersion(asstId: string, idx: number): Promise<void> {
+  return exclusive(async () => {
+    await flushEditors();
+    const asst = await db.messages.get(asstId);
+    if (!asst || idx < 0 || idx >= asst.versions.length || idx === asst.active) return;
+    if (asst.mode === 'discuss') {
+      await db.messages.update(asst.id, { active: idx, text: asst.versions[idx].raw });
+      return;
+    }
+    if (!asst.targetPageId) return;
+    const versions = await captureEdits(asst);
+    const v = versions[idx];
+    const page = await db.pages.get(asst.targetPageId);
+    if (page) await savePageDoc(page.id, replaceSegment(page.doc, asst.id, parseMarkdown(versionBody(v, asst.expectTitle), asst.id)), true);
+    await db.messages.update(asst.id, { versions, active: idx });
+    markChanged();
+  });
 }
 
 /** Saat aplikasi dibuka: pesan yang masih "streaming" berarti aplikasi tertutup di tengah jalan. */
@@ -684,28 +797,49 @@ export async function recoverInterrupted(): Promise<void> {
   for (const m of stuck) {
     if (m.role !== 'assistant') continue;
     if (m.mode === 'write' && m.targetPageId) {
+      const page = await db.pages.get(m.targetPageId);
       const raw = m.text;
+      const activeV = m.versions[m.active];
       if (raw.trim()) {
-        const c = cleanOutput(raw, m.expectTitle, true);
-        const blocks = parseMarkdown(c.body, m.id);
-        const versions = [...m.versions];
-        const v: Version = { raw, ser: serializeBlocks(blocks), words: countWords(c.body), usage: { hit: 0, miss: 0, out: 0 }, costUsd: 0 };
-        versions.push(v);
-        while (versions.length > 3) versions.splice(versions.findIndex((_, i) => i !== m.active), 1);
-        const page = await db.pages.get(m.targetPageId);
-        if (page) await savePageDoc(page.id, replaceSegment(page.doc, m.id, blocks), true);
-        await db.messages.update(m.id, { status: 'interrupted', text: '', versions, active: versions.length - 1, error: 'Aplikasi tertutup saat AI menulis.' });
-      } else if (m.versions.length) {
-        const v = m.versions[m.active];
-        const c = cleanOutput(v.raw, m.expectTitle, true);
-        const page = await db.pages.get(m.targetPageId);
-        if (page && segmentText(page.doc, m.id) === null) {
-          await savePageDoc(page.id, replaceSegment(page.doc, m.id, parseMarkdown(c.body, m.id)), true);
+        let versions: Version[];
+        let active: number;
+        let body: string;
+        if (activeV && raw.startsWith(versionBody(activeV, m.expectTitle))) {
+          // Aplikasi tertutup saat "Lanjutkan dari sini": teks tersimpan = versi lama + sambungan.
+          body = raw;
+          versions = [...m.versions];
+          active = m.active;
+          const blocks = parseMarkdown(body, m.id);
+          versions[active] = { ...activeV, raw: body, ser: serializeBlocks(blocks), words: countWords(body), clean: true };
+        } else {
+          body = cleanOutput(raw, m.expectTitle, true).body;
+          const blocks = parseMarkdown(body, m.id);
+          versions = [
+            ...keepVersions(m.versions, m.active),
+            { raw, ser: serializeBlocks(blocks), words: countWords(body), usage: { hit: 0, miss: 0, out: 0 }, costUsd: 0 },
+          ];
+          active = versions.length - 1;
+        }
+        if (page) await savePageDoc(page.id, replaceSegment(page.doc, m.id, parseMarkdown(body, m.id)), true);
+        await db.messages.update(m.id, {
+          status: 'interrupted',
+          text: '',
+          versions,
+          active,
+          costUnknown: true,
+          error: 'Aplikasi tertutup saat AI menulis.',
+        });
+      } else if (activeV) {
+        if (page && ownedText(page.doc, m.id) === null) {
+          await savePageDoc(page.id, replaceSegment(page.doc, m.id, parseMarkdown(versionBody(activeV, m.expectTitle), m.id)), true);
         }
         await db.messages.update(m.id, { status: 'done' });
       } else {
+        if (page) await savePageDoc(page.id, removeSegment(page.doc, m.id), true);
         await db.messages.update(m.id, { status: 'error', error: 'Aplikasi tertutup sebelum AI selesai menulis.' });
       }
+    } else if (!m.text.trim() && m.versions.length) {
+      await db.messages.update(m.id, { status: 'done', text: m.versions[m.active]?.raw ?? '' });
     } else {
       await db.messages.update(m.id, {
         status: m.text.trim() ? 'interrupted' : 'error',

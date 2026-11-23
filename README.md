@@ -29,7 +29,7 @@ Setiap push ke `main` di-build dan di-deploy otomatis ke GitHub Pages lewat `.gi
 | `src/db.ts` | Skema IndexedDB (Dexie): page, chat, pesan, lampiran, pengaturan |
 | `src/lib/providers.ts` | Daftar penyedia & model bawaan, harga, kemampuan |
 | `src/lib/api.ts` | Klien API format OpenAI (streaming, thinking per penyedia, tes koneksi, error) |
-| `src/lib/context.ts` | Penyusunan konteks percakapan supaya cache DeepSeek tetap kena |
+| `src/lib/context.ts` | Penyusunan konteks percakapan supaya cache penyedia AI tetap kena |
 | `src/lib/generate.ts` | Mesin penulisan: kirim, coba lagi, versi, batalkan, lanjutkan |
 | `src/lib/markdown.ts` | Konversi teks model ↔ dokumen editor, segmen per balasan AI |
 | `src/lib/prompts.ts` | Instruksi sistem dan instruksi per permintaan |

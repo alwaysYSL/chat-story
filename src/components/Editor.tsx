@@ -1,13 +1,25 @@
 import { EditorContent, Extension, useEditor, type Editor as TEditor } from '@tiptap/react';
+import { Fragment, Slice, type Node as PMNode } from '@tiptap/pm/model';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import { useEffect, useRef, useState } from 'react';
 import type { Page } from '../db';
 import { registerFlush } from '../lib/editors';
+import { blocksToHtml, parseMarkdown } from '../lib/markdown';
 import { savePageDoc } from '../lib/pages';
 import { debounce } from '../lib/util';
 import { IconCheck, IconRedo, IconUndo } from './Icons';
 
-/** Atribut `seg` di setiap blok: id balasan AI yang menulisnya. Ikut terbawa saat Enter. */
+/** Meta transaksi untuk perubahan dari luar editor (AI menulis, ganti versi, batalkan). */
+const EXTERNAL = 'chatStoryExternal';
+
+/**
+ * Atribut `seg` di setiap blok: id balasan AI yang menulisnya.
+ * - Enter di tengah paragraf AI: kedua potongan tetap milik AI (keepOnSplit).
+ * - Paragraf kosong baru (Enter di akhir paragraf, atau isinya dihapus semua) menjadi milik penulis.
+ * - Teks yang ditempel selalu milik penulis.
+ */
 const SegAttr = Extension.create({
   name: 'segAttr',
   addGlobalAttributes() {
@@ -25,24 +37,113 @@ const SegAttr = Extension.create({
       },
     ];
   },
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('segOwnership'),
+        appendTransaction(trs, _old, state) {
+          if (!trs.some((tr) => tr.docChanged && !tr.getMeta(EXTERNAL))) return null;
+          const { $head } = state.selection;
+          if ($head.depth < 1) return null;
+          const node = $head.node(1);
+          if (!node.isTextblock || node.content.size > 0 || !node.attrs.seg) return null;
+          return state.tr.setNodeMarkup($head.before(1), undefined, { ...node.attrs, seg: null });
+        },
+        props: {
+          transformPasted(slice) {
+            const strip = (frag: Fragment): Fragment => {
+              const nodes: PMNode[] = [];
+              frag.forEach((n) => nodes.push(n.attrs.seg ? n.type.create({ ...n.attrs, seg: null }, n.content, n.marks) : n));
+              return Fragment.fromArray(nodes);
+            };
+            return new Slice(strip(slice.content), slice.openStart, slice.openEnd);
+          },
+          transformPastedHTML(html) {
+            // Tempelan dari luar aplikasi (mis. Notion): judul jadi paragraf tebal, daftar jadi paragraf berawalan "–",
+            // supaya tidak berubah tanpa sengaja menjadi judul bab.
+            if (html.includes('data-pm-slice')) return html;
+            return html
+              .replace(/<h[1-6]\b[^>]*>/gi, '<p><strong>')
+              .replace(/<\/h[1-6]>/gi, '</strong></p>')
+              .replace(/<li\b[^>]*>/gi, '<p>– ')
+              .replace(/<\/li>/gi, '</p>');
+          },
+        },
+      }),
+    ];
+  },
+});
+
+export interface StreamInfo {
+  seg: string;
+  text: string;
+  thinking: boolean;
+}
+
+const streamKey = new PluginKey<StreamInfo | null>('stream');
+
+/** Tulisan AI yang sedang mengalir ditampilkan di posisi akhirnya di naskah (bukan selalu di akhir page). */
+const StreamWidget = Extension.create({
+  name: 'streamWidget',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<StreamInfo | null>({
+        key: streamKey,
+        state: {
+          init: () => null,
+          apply: (tr, prev) => {
+            const meta = tr.getMeta(streamKey);
+            return meta === undefined ? prev : (meta as StreamInfo | null);
+          },
+        },
+        props: {
+          decorations(state) {
+            const info = streamKey.getState(state);
+            if (!info) return null;
+            let pos = state.doc.content.size;
+            state.doc.forEach((node, offset) => {
+              if (node.attrs.seg === info.seg) pos = offset + node.nodeSize;
+            });
+            const html = blocksToHtml(parseMarkdown(info.text, null));
+            const widget = Decoration.widget(
+              pos,
+              () => {
+                const el = document.createElement('div');
+                el.className = 'stream-widget';
+                el.contentEditable = 'false';
+                el.innerHTML =
+                  html + `<div class="typing"><span></span><span></span><span></span>${info.thinking ? ' AI sedang berpikir…' : ''}</div>`;
+                return el;
+              },
+              { side: 1, key: `stream-${info.text.length}-${info.thinking ? 1 : 0}` },
+            );
+            return DecorationSet.create(state.doc, [widget]);
+          },
+        },
+      }),
+    ];
+  },
 });
 
 export function StoryEditor({
   page,
   editable,
+  stream,
   onFocusChange,
   onReady,
 }: {
   page: Page;
   editable: boolean;
+  stream: StreamInfo | null;
   onFocusChange: (focused: boolean) => void;
   onReady?: () => void;
 }) {
   const pageId = page.id;
   const extRev = useRef(page.extRev);
+  const pendingSave = useRef<Promise<void> | null>(null);
   const saver = useRef(
     debounce((ed: TEditor) => {
-      void savePageDoc(pageId, ed.getJSON(), false);
+      pendingSave.current = savePageDoc(pageId, ed.getJSON(), false);
     }, 500),
   );
 
@@ -65,6 +166,7 @@ export function StoryEditor({
         trailingNode: false,
       }),
       SegAttr,
+      StreamWidget,
     ],
     content: page.doc,
     editable,
@@ -72,34 +174,49 @@ export function StoryEditor({
     shouldRerenderOnTransaction: false,
     editorProps: {
       attributes: { class: 'story-text', spellcheck: 'false', 'aria-label': 'Naskah' },
+      // Jaga kursor tetap terlihat di atas bar format yang menempel di bawah layar.
+      scrollMargin: { top: 24, bottom: 110, left: 0, right: 0 },
+      scrollThreshold: { top: 24, bottom: 110, left: 0, right: 0 },
     },
-    onUpdate: ({ editor: ed }) => saver.current(ed),
+    onUpdate: ({ editor: ed, transaction }) => {
+      // Hanya simpan kalau isi benar-benar berubah oleh pengguna.
+      if (transaction.docChanged && !transaction.getMeta(EXTERNAL)) saver.current(ed);
+    },
     onFocus: () => onFocusChange(true),
     onBlur: () => onFocusChange(false),
     onCreate: () => onReady?.(),
   });
 
-  // Paksa simpan sebelum AI membaca naskah, dan saat keluar dari page.
+  // Paksa simpan (dan tunggu selesai) sebelum AI membaca naskah, saat aplikasi disembunyikan, dan saat keluar dari page.
   useEffect(() => {
     const s = saver.current;
-    const off = registerFlush(() => s.flush());
+    const off = registerFlush(async () => {
+      s.flush();
+      await pendingSave.current;
+    });
     return () => {
       s.flush();
       off();
     };
   }, []);
 
-  // Isi diubah dari luar editor (AI menulis, ganti versi, batalkan).
+  // Isi diubah dari luar editor. Tidak masuk riwayat undo, supaya Undo tidak menghapus tulisan AI.
   useEffect(() => {
     if (!editor || page.extRev === extRev.current) return;
     extRev.current = page.extRev;
     saver.current.cancel();
-    editor.commands.setContent(page.doc, { emitUpdate: false });
+    editor.chain().setMeta('addToHistory', false).setMeta(EXTERNAL, true).setContent(page.doc, { emitUpdate: false }).run();
   }, [editor, page.extRev, page.doc]);
 
   useEffect(() => {
-    editor?.setEditable(editable);
+    // false = jangan memicu event "update" (yang sebelumnya membuat page tersimpan ulang setiap dibuka).
+    editor?.setEditable(editable, false);
   }, [editor, editable]);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.view.dispatch(editor.state.tr.setMeta(streamKey, stream).setMeta('addToHistory', false).setMeta(EXTERNAL, true));
+  }, [editor, stream?.seg, stream?.text, stream?.thinking]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>

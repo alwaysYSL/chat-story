@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBack } from '../lib/nav';
 import { db } from '../db';
 import { IconBack } from '../components/Icons';
 import { ConfirmSheet, toast } from '../components/ui';
@@ -32,7 +33,7 @@ export default function Trash() {
   return (
     <div className="screen">
       <header className="page-header">
-        <button className="icon-btn" aria-label="Kembali" onClick={() => nav(-1)}>
+        <button className="icon-btn" aria-label="Kembali" onClick={() => goBack(nav)}>
           <IconBack />
         </button>
         <div className="chat-head-title">Sampah</div>

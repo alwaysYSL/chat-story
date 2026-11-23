@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
-import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { HashRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { flushEditors } from './lib/editors';
+import { runMigrations } from './lib/migrations';
 import { ToastHost } from './components/ui';
 import { UpdateBanner } from './components/UpdateBanner';
 import { recoverInterrupted } from './lib/generate';
@@ -16,13 +18,35 @@ import Onboarding from './screens/Onboarding';
 
 function Startup() {
   useEffect(() => {
-    void recoverInterrupted();
-    void purgeTrash();
+    void (async () => {
+      await runMigrations();
+      await recoverInterrupted();
+      await purgeTrash();
+    })();
+    // Simpan tulisan yang belum tersimpan saat aplikasi disembunyikan (Android bisa menutupnya kapan saja).
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') void flushEditors();
+    };
+    const onHide = () => void flushEditors();
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pagehide', onHide);
     void navigator.storage?.persisted?.().then((p) => {
       if (!p) void navigator.storage.persist?.();
     });
   }, []);
   return null;
+}
+
+/** Komponen dibuat ulang untuk setiap chat/page, supaya isi kolom ketik dan pilihan tidak terbawa. */
+function ChatRoute() {
+  const { id = 'new' } = useParams();
+  const loc = useLocation();
+  return <ChatScreen key={id === 'new' ? `new-${loc.key}` : id} />;
+}
+
+function PageRoute() {
+  const { id = '' } = useParams();
+  return <PageView key={id} />;
 }
 
 function Gate({ children }: { children: React.ReactNode }) {
@@ -58,8 +82,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/chats" element={<Chats />} />
-          <Route path="/chat/:id" element={<ChatScreen />} />
-          <Route path="/page/:id" element={<PageView />} />
+          <Route path="/chat/:id" element={<ChatRoute />} />
+          <Route path="/page/:id" element={<PageRoute />} />
           <Route path="/search" element={<Search />} />
           <Route path="/settings" element={<SettingsScreen />} />
           <Route path="/trash" element={<Trash />} />

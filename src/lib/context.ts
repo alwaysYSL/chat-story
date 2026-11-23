@@ -197,14 +197,17 @@ export async function buildDiscussContext(chat: Chat, vision: boolean, beforeSeq
       head.push({ role: 'user', content });
     } else head.push({ role: 'user', content: intro });
   }
-  const all = await db.messages.where('chatId').equals(chat.id).sortBy('seq');
+  const all = (await db.messages.where('chatId').equals(chat.id).sortBy('seq')).filter((m) => m.seq < beforeSeq);
   const rest: ApiMessage[] = [];
-  for (const m of all) {
-    if (m.seq >= beforeSeq || m.status === 'canceled' || m.excluded) continue;
-    if (m.role === 'user') rest.push({ role: 'user', content: await messageContent(m, vision, omitted) });
-    else if (m.text.trim()) rest.push({ role: 'assistant', content: m.text });
+  for (let i = 0; i < all.length; i++) {
+    const u = all[i];
+    if (u.role !== 'user') continue;
+    const a = all[i + 1]?.role === 'assistant' ? all[i + 1] : undefined;
+    // Pertanyaan yang jawabannya gagal/kosong tidak dikirim, supaya tidak tergabung dengan pertanyaan berikutnya.
+    if (!a || !a.text.trim() || u.status === 'canceled' || a.status === 'canceled' || u.excluded || a.excluded) continue;
+    rest.push({ role: 'user', content: await messageContent(u, vision, omitted) });
+    rest.push({ role: 'assistant', content: a.text });
   }
-  // Pastikan tidak ada pesan user tanpa balasan di tengah (gagal) yang membingungkan.
   return { messages: mergeSameRole([...head, ...rest]), imagesOmitted: omitted.n };
 }
 
