@@ -51,12 +51,17 @@ const DEFAULT_SETTINGS: Omit<Settings, 'providers'> = {
 };
 
 /**
- * Temperature per tingkat kreativitas. DeepSeek merekomendasikan 1.5 untuk penulisan kreatif;
- * model lain (Claude, GPT, Laguna) memakai skala lebih rendah, dan sebagian menolak nilai di atas 1.
+ * Temperature per tingkat kreativitas.
+ * - API DeepSeek resmi memetakan ulang nilai temperature di sisi server (nilai 1,0 dari API dipakai model
+ *   sebagai ±0,3), jadi DeepSeek merekomendasikan 1,5 untuk penulisan kreatif.
+ * - Penyedia lain (termasuk yang menjalankan model DeepSeek sendiri, mis. TokenKoding) meneruskan nilainya
+ *   apa adanya. Nilai 1,5 di sana membuat tulisan melantur menjadi campuran bahasa dan simbol, jadi
+ *   dipakai skala biasa.
  */
-export function temperatureFor(model: ModelConfig, c: Creativity): number {
-  const deepseek = /deepseek/i.test(model.id);
-  const scale: Record<Creativity, number> = deepseek
+export function temperatureFor(provider: ProviderConfig, model: ModelConfig, c: Creativity): number {
+  void model;
+  const officialDeepSeek = provider.kind === 'deepseek';
+  const scale: Record<Creativity, number> = officialDeepSeek
     ? { stable: 1.2, normal: 1.5, wild: 1.7 }
     : { stable: 0.6, normal: 0.85, wild: 1.0 };
   return scale[c];
