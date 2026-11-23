@@ -1,3 +1,4 @@
+import { isNative, nativeSaveFile, nativeShareFile } from './native';
 export function uid(): string {
   return crypto.randomUUID();
 }
@@ -90,7 +91,12 @@ export async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   return new Blob([bytes], { type: mime });
 }
 
-export function downloadFile(name: string, content: Blob) {
+/**
+ * Simpan file. PWA: unduhan browser (folder Download). APK: folder Documents/ChatStory.
+ * Mengembalikan lokasi untuk ditampilkan ke pengguna.
+ */
+export async function downloadFile(name: string, content: Blob): Promise<string> {
+  if (isNative()) return nativeSaveFile(name, content);
   const url = URL.createObjectURL(content);
   const a = document.createElement('a');
   a.href = url;
@@ -99,12 +105,14 @@ export function downloadFile(name: string, content: Blob) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return `Download/${name}`;
 }
 
 export type ShareResult = 'shared' | 'canceled' | 'unsupported';
 
 /** Bagikan file lewat menu share Android. 'canceled' = pengguna menutup menu share tanpa memilih. */
 export async function shareFile(name: string, content: Blob, title: string): Promise<ShareResult> {
+  if (isNative()) return nativeShareFile(name, content, title);
   const file = new File([content], name, { type: content.type || 'application/octet-stream' });
   const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
   if (nav.canShare && nav.canShare({ files: [file] })) {

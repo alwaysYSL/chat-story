@@ -3,6 +3,7 @@ import { db, type Attachment, type Chat, type ChatKind, type LengthPreset, type 
 import { buildContext, getBrief, mergeSameRole, messageContent } from './context';
 import { ApiError, streamChat, type ApiMessage } from './api';
 import { flushEditors } from './editors';
+import { isNative, nativeKeepAwake } from './native';
 import {
   cleanOutput,
   ownedText,
@@ -100,6 +101,7 @@ export class UserError extends Error {
 
 let wakeLock: WakeLockSentinel | null = null;
 async function acquireWakeLock() {
+  if (isNative()) return nativeKeepAwake(true);
   if (!('wakeLock' in navigator) || wakeLock) return;
   try {
     const lock = await navigator.wakeLock.request('screen');
@@ -118,6 +120,7 @@ async function acquireWakeLock() {
   }
 }
 function releaseWakeLock() {
+  if (isNative()) void nativeKeepAwake(false);
   const lock = wakeLock;
   wakeLock = null;
   void lock?.release().catch(() => {});

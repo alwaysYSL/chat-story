@@ -18,7 +18,8 @@ Status: **disepakati, siap dibangun (Versi 1)**.
 
 | Bagian | Pilihan |
 |---|---|
-| Bentuk aplikasi | PWA, dipasang lewat Chrome Android → "Tambahkan ke layar utama" |
+| Bentuk aplikasi | PWA (Chrome Android → "Tambahkan ke layar utama") **dan APK Android** (Capacitor), dari kode yang sama |
+| APK | Dibangun GitHub Actions, dirilis di GitHub Releases. Koneksi AI lewat plugin Android `StreamHttp` (tanpa batasan CORS, tetap streaming). Update: banner "versi baru → Unduh". Ditandatangani kunci tetap (`android/keystore.p12.enc`, password = secret `APK_KEY_PASSWORD`) |
 | UI | React + TypeScript + Vite |
 | Editor | TipTap (ProseMirror) |
 | Penyimpanan | IndexedDB (via Dexie), dengan permintaan *persistent storage* |
@@ -26,7 +27,6 @@ Status: **disepakati, siap dibangun (Versi 1)**.
 | AI | `fetch` langsung ke penyedia pilihan (format OpenAI Chat Completions, streaming) |
 | Hosting | GitHub Pages, deploy otomatis via GitHub Actions dari repo ini |
 
-Kode yang sama bisa dibungkus menjadi APK dengan Capacitor di kemudian hari (Versi 2, opsional).
 
 ---
 
@@ -290,7 +290,6 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 - Pilih teks → minta AI menulis ulang bagian itu.
 - Lampiran PDF (lewat API OCR DeepSeek).
 - **Ringkasan bab lama:** bab yang sudah selesai diganti ringkasannya (dibuat sekali per bab, disimpan supaya tetap kena cache); hanya aktif kalau konteks mendekati batas model atau dinyalakan sendiri.
-- Bungkus menjadi APK dengan Capacitor (opsional).
 
 **Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat.
 

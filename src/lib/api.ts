@@ -1,4 +1,5 @@
 import type { Usage } from '../db';
+import { httpFetch, isNative } from './native';
 import { chatUrl, type ModelConfig, type ProviderConfig } from './providers';
 
 export type ContentPart =
@@ -152,7 +153,7 @@ export async function streamChat(
 
   const send = async (): Promise<Response> => {
     try {
-      return await fetch(chatUrl(req.provider, req.prefix), {
+      return await httpFetch(chatUrl(req.provider, req.prefix), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${req.provider.apiKey.trim()}` },
         body: JSON.stringify(buildBody(req, true)),
@@ -160,12 +161,8 @@ export async function streamChat(
       });
     } catch (e) {
       if ((e as Error).name === 'AbortError') throw new ApiError('aborted', 'Dihentikan.');
-      throw new ApiError(
-        navigator.onLine ? 'interrupted' : 'offline',
-        navigator.onLine
-          ? `Tidak bisa terhubung ke ${name}. Periksa koneksi internet dan base URL di Pengaturan.`
-          : 'Tidak ada koneksi internet.',
-      );
+      if (!navigator.onLine) throw new ApiError('offline', 'Tidak ada koneksi internet.');
+      throw new ApiError('interrupted', await connectFailMessage(chatUrl(req.provider, req.prefix), name));
     }
   };
   let res = await send();
@@ -272,6 +269,23 @@ export async function streamChat(
   return { content, usage, finishReason };
 }
 
+/**
+ * Jelaskan kenapa koneksi gagal. Di PWA, permintaan "no-cors" berhasil kalau servernya bisa dihubungi;
+ * berarti yang memblokir adalah aturan CORS browser, bukan alamat atau internet.
+ */
+async function connectFailMessage(url: string, name: string): Promise<string> {
+  if (!navigator.onLine) return 'Tidak ada koneksi internet.';
+  if (!isNative()) {
+    try {
+      await fetch(url, { method: 'GET', mode: 'no-cors', cache: 'no-store' });
+      return `${name} tidak mengizinkan aplikasi web memanggil API-nya langsung (CORS). Pakai aplikasi Android (APK) Chat Story, yang tidak terkena aturan ini, atau minta ${name} mengaktifkan CORS.`;
+    } catch {
+      /* server memang tidak bisa dihubungi */
+    }
+  }
+  return `Tidak bisa terhubung ke ${name}. Periksa koneksi internet dan base URL di Pengaturan.`;
+}
+
 function isCompleteJson(s: string): boolean {
   if (!s.startsWith('{')) return false;
   try {
@@ -307,7 +321,7 @@ export async function testProvider(provider: ProviderConfig, model?: ModelConfig
   if (provider.kind === 'deepseek') {
     let res: Response;
     try {
-      res = await fetch(`${provider.baseUrl.replace(/\/+$/, '')}/user/balance`, { headers: { Authorization: `Bearer ${key}` } });
+      res = await httpFetch(`${provider.baseUrl.replace(/\/+$/, '')}/user/balance`, { headers: { Authorization: `Bearer ${key}` } });
     } catch {
       throw new ApiError('offline', `Tidak bisa terhubung ke ${name}. Periksa koneksi internet.`);
     }
@@ -330,17 +344,14 @@ export async function testProvider(provider: ProviderConfig, model?: ModelConfig
   };
   const send = async () => {
     try {
-      return await fetch(chatUrl(provider), {
+      return await httpFetch(chatUrl(provider), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
         // Tes koneksi tidak perlu jawaban panjang, walaupun modelnya wajib berpikir.
         body: JSON.stringify(buildBody(req, false, false)),
       });
     } catch {
-      throw new ApiError(
-        'offline',
-        `Tidak bisa terhubung ke ${name}. Periksa koneksi internet dan base URL. Sebagian penyedia juga tidak mengizinkan aplikasi web memanggilnya langsung.`,
-      );
+      throw new ApiError('offline', await connectFailMessage(chatUrl(provider), name));
     }
   };
   let res = await send();

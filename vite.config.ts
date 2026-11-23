@@ -35,17 +35,22 @@ function cspPlugin(): Plugin {
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
-export default defineConfig({
-  base: '/chat-story/',
+// `vite build --mode android`: bundel untuk APK (Capacitor). Tanpa service worker (aplikasi sudah ada di APK)
+// dan tanpa CSP meta (Capacitor menyisipkan skrip jembatan native ke halaman).
+export default defineConfig(({ mode }) => {
+  const android = mode === 'android';
+  return {
+  base: android ? '/' : '/chat-story/',
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   // Editor TipTap + React membuat satu bundel ~860 KB (270 KB gzip); di-cache service worker setelah pertama dibuka.
-  build: { chunkSizeWarningLimit: 1000 },
+  build: { chunkSizeWarningLimit: 1000, outDir: android ? 'dist-android' : 'dist' },
   plugins: [
     react(),
-    cspPlugin(),
+    ...(android ? [] : [cspPlugin()]),
     VitePWA({
+      disable: android,
       // 'prompt': versi baru menunggu sampai pengguna menekan "Perbarui" (lihat UpdateBanner),
       // supaya tulisan AI yang sedang berjalan tidak terputus oleh muat ulang otomatis.
       registerType: 'prompt',
@@ -74,4 +79,5 @@ export default defineConfig({
       },
     }),
   ],
+  };
 });

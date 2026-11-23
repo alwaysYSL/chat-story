@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { flushEditors } from './lib/editors';
 import { runMigrations } from './lib/migrations';
+import { exitApp, installBackButton, installExternalLinkHandler } from './lib/native';
 import { ToastHost } from './components/ui';
 import { UpdateBanner } from './components/UpdateBanner';
 import { recoverInterrupted } from './lib/generate';
@@ -30,6 +31,13 @@ function Startup() {
     const onHide = () => void flushEditors();
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('pagehide', onHide);
+    // APK: tombol back menutup sheet, lalu kembali ke halaman sebelumnya, lalu meminimalkan aplikasi.
+    void installBackButton(() => {
+      const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+      if (idx > 0) window.history.back();
+      else void exitApp();
+    });
+    installExternalLinkHandler();
     void navigator.storage?.persisted?.().then((p) => {
       if (!p) void navigator.storage.persist?.();
     });

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { IconSparkle } from '../components/Icons';
 import { toast } from '../components/ui';
 import { testProvider } from '../lib/api';
+import { isNative } from '../lib/native';
 import { PROVIDER_INFO } from '../lib/providers';
 import { updateProvider, updateSettings, useSettings } from '../lib/settings';
 
@@ -135,7 +136,20 @@ export default function Onboarding() {
           </div>
         )}
 
-        {step === 2 && (
+        {step === 2 && isNative() && (
+          <div className="ob-card">
+            <h2>2. Siap dipakai</h2>
+            <p>
+              Cerita tersimpan di HP ini. Kalau sebelumnya Anda memakai versi web, pindahkan cerita lewat Pengaturan → Backup
+              di versi web, lalu Pengaturan → Restore dari file di aplikasi ini.
+            </p>
+            <button className="btn btn-primary wide" onClick={() => void finish()}>
+              Selesai
+            </button>
+          </div>
+        )}
+
+        {step === 2 && !isNative() && (
           <div className="ob-card">
             <h2>2. Pasang di layar utama</h2>
             {standalone ? (

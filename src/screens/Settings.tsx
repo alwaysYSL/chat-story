@@ -4,6 +4,7 @@ import { IconBack } from '../components/Icons';
 import { ConfirmSheet, Sheet, SheetItem, Toggle, toast } from '../components/ui';
 import { getSnapshotInfo, snapshotBlob, type SnapshotInfo } from '../lib/migrations';
 import { goBack } from '../lib/nav';
+import { isNative } from '../lib/native';
 import { backupFileName, createBackup, markBackedUp, restoreBackup } from '../lib/backup';
 import { ProviderList } from '../components/Providers';
 import { CREATIVITY_LABEL, updateSettings, useSettings, type Creativity, type Settings } from '../lib/settings';
@@ -109,9 +110,9 @@ export default function SettingsScreen() {
         toast('Backup dibatalkan. File belum tersimpan.');
         return;
       }
-      if (r === 'unsupported') downloadFile(name, blob);
+      const where = r === 'unsupported' ? await downloadFile(name, blob) : null;
       await markBackedUp(at);
-      toast(r === 'shared' ? 'Backup dibagikan' : 'Backup diunduh ke folder Download');
+      toast(where ? `Backup disimpan di ${where}` : 'Backup dibagikan');
     } catch (e) {
       toast('Backup gagal: ' + ((e as Error).message || String(e)));
     } finally {
@@ -127,7 +128,7 @@ export default function SettingsScreen() {
       if (mode === 'replace') {
         // Data di HP ini diunduh dulu sebagai pengaman sebelum diganti.
         const { blob } = await createBackup();
-        downloadFile(backupFileName('chat-story-sebelum-restore'), blob);
+        await downloadFile(backupFileName('chat-story-sebelum-restore'), blob);
       }
       const r = await restoreBackup(file, mode);
       toast(
@@ -141,7 +142,7 @@ export default function SettingsScreen() {
 
   const downloadSnapshot = async () => {
     const blob = await snapshotBlob();
-    if (blob) downloadFile(backupFileName('chat-story-sebelum-pembaruan'), blob);
+    if (blob) toast('Disimpan di ' + (await downloadFile(backupFileName('chat-story-sebelum-pembaruan'), blob)));
   };
 
   return (
@@ -244,7 +245,10 @@ export default function SettingsScreen() {
           <h3>Data</h3>
           <p className="note">
             Semua cerita hanya tersimpan di HP ini. Backup terakhir: {s.lastBackupAt ? timeAgo(s.lastBackupAt) : 'belum pernah'}.
-            {storage && ` Terpakai ${storage.used}. Penyimpanan permanen: ${storage.persisted ? 'aktif' : 'belum aktif'}.`}
+            {storage &&
+              (isNative()
+                ? ` Terpakai ${storage.used}.`
+                : ` Terpakai ${storage.used}. Penyimpanan permanen: ${storage.persisted ? 'aktif' : 'belum aktif'}.`)}
           </p>
           <div className="row-buttons left">
             <button className="btn btn-primary" disabled={backingUp} onClick={() => void doBackup()}>
@@ -264,7 +268,7 @@ export default function SettingsScreen() {
               }}
             />
           </div>
-          {storage && !storage.persisted && (
+          {storage && !storage.persisted && !isNative() && (
             <button
               className="btn"
               onClick={async () => {
@@ -291,7 +295,14 @@ export default function SettingsScreen() {
 
         <section id="tentang">
           <h3>Tentang</h3>
-          <p className="note">Chat Story versi {__APP_VERSION__}</p>
+          <p className="note">
+            Chat Story versi {__APP_VERSION__} ({isNative() ? 'aplikasi Android' : 'versi web'}).{' '}
+            {!isNative() && (
+              <a href="https://github.com/alwaysYSL/chat-story/releases/latest" target="_blank" rel="noreferrer">
+                Unduh aplikasi Android
+              </a>
+            )}
+          </p>
           <Link to="/onboarding" className="settings-link">
             Panduan awal & cara pasang ›
           </Link>
