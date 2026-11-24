@@ -12,11 +12,12 @@ const KIND_LABEL: Record<Chat['kind'], string> = {
   main: 'Chat utama',
   discuss: 'Diskusi',
   free: 'Chat',
+  roleplay: 'Roleplay',
 };
 
 export default function Chats() {
   const nav = useNavigate();
-  const chats = useLiveQuery(() => db.chats.filter((c) => !c.deletedAt).toArray(), []);
+  const chats = useLiveQuery(() => db.chats.filter((c) => !c.deletedAt && c.kind !== 'roleplay').toArray(), []);
   const pages = useLiveQuery(() => db.pages.filter((p) => !p.parentId).toArray(), []);
   const [menu, setMenuChat] = useState<Chat | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);

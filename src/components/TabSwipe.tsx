@@ -1,18 +1,18 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
-import { IconChat, IconHome } from './Icons';
+import { IconChat, IconHome, IconMask } from './Icons';
 import { useLocation, useNavigate, type Location, type NavigateFunction } from 'react-router-dom';
 
 /**
- * Tiga layar utama yang bisa digeser: Pengaturan ← Beranda → Chat.
+ * Layar utama yang bisa digeser: Pengaturan ← Beranda → Chat → Roleplay.
  *
  * Riwayat: Beranda adalah akar. Pindah dari Beranda ke Chat/Pengaturan menambah satu entri
  * (ditandai `tabFromHome`), pindah antar Chat ↔ Pengaturan menggantikan entri itu, dan kembali ke
  * Beranda memakai back. Jadi tombol back dari tab mana pun kembali ke Beranda, tidak bolak-balik antar tab.
  */
-export type Tab = 'settings' | 'home' | 'chats';
+export type Tab = 'settings' | 'home' | 'chats' | 'roleplay';
 
-export const TAB_ORDER: Tab[] = ['settings', 'home', 'chats'];
-const PATH: Record<Tab, string> = { settings: '/settings', home: '/', chats: '/chats' };
+export const TAB_ORDER: Tab[] = ['settings', 'home', 'chats', 'roleplay'];
+const PATH: Record<Tab, string> = { settings: '/settings', home: '/', chats: '/chats', roleplay: '/roleplay' };
 
 interface TabState {
   tabFromHome?: boolean;
@@ -22,6 +22,7 @@ export function tabOf(pathname: string): Tab | null {
   if (pathname === '/' || pathname === '') return 'home';
   if (pathname === '/chats') return 'chats';
   if (pathname === '/settings') return 'settings';
+  if (pathname === '/roleplay') return 'roleplay';
   return null;
 }
 
@@ -315,6 +316,9 @@ export function TabPager({ panes }: { panes: Record<Tab, ReactNode> }) {
         </button>
         <button data-tab-btn role="tab" aria-selected={tab === 'chats'} className={'tab-pill' + (tab === 'chats' ? ' active' : '')} aria-label="Chat" onClick={() => go('chats')}>
           <IconChat size={20} />
+        </button>
+        <button data-tab-btn role="tab" aria-selected={tab === 'roleplay'} className={'tab-pill' + (tab === 'roleplay' ? ' active' : '')} aria-label="Roleplay" onClick={() => go('roleplay')}>
+          <IconMask size={20} />
         </button>
       </div>
       <div className="pager-view">

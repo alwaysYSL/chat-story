@@ -1,6 +1,6 @@
 # Chat Story
 
-PWA Android untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur seperti Notion mobile + Notion AI. Spesifikasi lengkap ada di [SPEC.md](SPEC.md).
+Aplikasi Android (PWA dan APK) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, TokenKoding, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur seperti Notion mobile + Notion AI. Mulai versi 3 ada modul **Roleplay**: karakter, persona, lorebook, dan impor/ekspor kartu karakter (format SillyTavern/Chub). Spesifikasi lengkap ada di [SPEC.md](SPEC.md).
 
 **Aplikasi:** https://alwaysysl.github.io/chat-story/
 
@@ -43,5 +43,7 @@ Setiap push ke `main` di-build dan di-deploy otomatis ke GitHub Pages lewat `.gi
 | `src/lib/find.ts` | Cari & ganti di naskah (sorotan editor, ganti di bab lain) |
 | `src/lib/pdf.ts` | Ambil teks dari lampiran PDF (pdf.js) |
 | `src/lib/autobackup.ts` | Backup otomatis mingguan di APK |
+| `src/lib/rp/` | Roleplay: kartu PNG/JSON (`cards.ts`), susunan konteks dan lorebook (`context.ts`), mesin chat dan bantuan AI (`engine.ts`, `assist.ts`), data (`data.ts`) |
+| `src/screens/rp/` | Tab Roleplay, halaman dan editor karakter, persona, lorebook, chat roleplay |
 | `src/screens/` | Beranda, Chat, Page, Cari, Pengaturan, Sampah, Onboarding |
 | `src/components/` | Editor TipTap, sheet, ikon, menu page |

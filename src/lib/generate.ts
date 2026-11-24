@@ -39,7 +39,8 @@ export interface ActiveGen {
   chatId: string;
   messageId: string;
   pageId: string | null;
-  mode: 'write' | 'discuss';
+  /** 'impersonate' = roleplay: AI menulis giliran persona ke kolom ketik */
+  mode: 'write' | 'discuss' | 'roleplay' | 'impersonate';
   /** teks yang sudah ditulis (sudah dibersihkan) */
   live: string;
   words: number;
@@ -91,6 +92,29 @@ export async function exclusive<T>(fn: () => Promise<T>): Promise<T> {
 
 export function stopGeneration() {
   controller?.abort();
+}
+
+/* ---------- Dipakai modul roleplay: status, kunci, Stop, dan Wake Lock yang sama ---------- */
+
+export function beginGen(g: ActiveGen): AbortSignal {
+  controller = new AbortController();
+  setActive(g);
+  void acquireWakeLock();
+  return controller.signal;
+}
+
+export function patchGen(p: Partial<ActiveGen>) {
+  if (active) setActive({ ...active, ...p });
+}
+
+export function endGen() {
+  controller = null;
+  releaseWakeLock();
+  setActive(null);
+}
+
+export function currentGen(): ActiveGen | null {
+  return active;
 }
 
 export class UserError extends Error {
@@ -871,6 +895,17 @@ export async function recoverInterrupted(): Promise<void> {
       } else {
         if (page) await savePageDoc(page.id, removeSegment(page.doc, m.id), true);
         await db.messages.update(m.id, { status: 'error', error: 'Aplikasi tertutup sebelum AI selesai menulis.' });
+      }
+    } else if (m.mode === 'roleplay') {
+      // Roleplay: teks yang sudah masuk menjadi versi baru (ditandai terputus).
+      const prev = m.versions[m.active]?.raw ?? '';
+      if (m.text.trim() && m.text !== prev) {
+        const versions = [...m.versions, { raw: m.text, ser: '', words: countWords(m.text), usage: { hit: 0, miss: 0, out: 0 }, costUsd: 0 }].slice(-10);
+        await db.messages.update(m.id, { status: 'interrupted', versions, active: versions.length - 1, costUnknown: true, error: 'Aplikasi tertutup saat AI menulis.' });
+      } else if (m.versions.length) {
+        await db.messages.update(m.id, { status: 'done', text: prev });
+      } else {
+        await db.messages.update(m.id, { status: 'error', error: 'Aplikasi tertutup sebelum AI selesai menjawab.' });
       }
     } else if (!m.text.trim() && m.versions.length) {
       await db.messages.update(m.id, { status: 'done', text: m.versions[m.active]?.raw ?? '' });

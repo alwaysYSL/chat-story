@@ -188,11 +188,13 @@ async function deleteChatHard(chatId: string): Promise<void> {
   const attIds = msgs.flatMap((m) => m.attachmentIds);
   await db.attachments.bulkDelete(attIds);
   await db.messages.bulkDelete(msgs.map((m) => m.id));
+  await db.rpSummaries.where('chatId').equals(chatId).delete();
+  await db.usage.where('rootId').equals(chatId).delete();
   await db.chats.delete(chatId);
 }
 
 export async function deletePageHard(id: string): Promise<void> {
-  await db.transaction('rw', [db.pages, db.chats, db.messages, db.attachments, db.usage], async () => {
+  await db.transaction('rw', [db.pages, db.chats, db.messages, db.attachments, db.usage, db.rpSummaries], async () => {
     const page = await db.pages.get(id);
     if (!page) return;
     if (!page.parentId) {
@@ -207,7 +209,7 @@ export async function deletePageHard(id: string): Promise<void> {
 }
 
 export async function deleteChatPermanently(id: string): Promise<void> {
-  await db.transaction('rw', db.chats, db.messages, db.attachments, () => deleteChatHard(id));
+  await db.transaction('rw', [db.chats, db.messages, db.attachments, db.rpSummaries, db.usage], () => deleteChatHard(id));
 }
 
 export async function purgeTrash(): Promise<void> {
