@@ -1,14 +1,14 @@
 # Chat Story — Spesifikasi Aplikasi
 
-Aplikasi Android (PWA) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan.
+Aplikasi Android (PWA dan APK) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, TokenKoding, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan. Mulai Versi 3 ada modul **Roleplay** (bagian 14).
 
-Status: **disepakati, siap dibangun (Versi 1)**.
+Status: Versi 1 dan 2 selesai. **Versi 3 (Roleplay): rancangan, menunggu persetujuan.**
 
 ---
 
 ## 1. Prinsip
 
-- **Satu tujuan:** menulis cerita bersama AI. Tidak ada fitur di luar itu.
+- **Dua modul:** menulis cerita bersama AI, dan (Versi 3) roleplay dengan karakter buatan sendiri. Tidak ada fitur di luar itu.
 - **Data hanya di HP.** Tidak ada server, akun, atau sinkronisasi cloud.
 - **Hemat secara default:** thinking mati, cache penyedia dimaksimalkan, biaya terlihat di setiap balasan (kalau harga model diketahui).
 - **Mirip Notion mobile:** Beranda berisi daftar page, page langsung menampilkan naskah, Ask AI di bawah, chat AI menulis langsung ke page.
@@ -42,9 +42,9 @@ Beranda ─┬─ Page cerita ── Page bab
 
 Bar bawah (di Beranda, tab Chat, dan page): **🔍 Cari · Ask AI · ✏️ Page baru**.
 
-**Geser antar layar utama** (Versi 2): urutan **Pengaturan ← Beranda → Chat**. Geser jari ke kiri untuk layar di kanan, ke kanan untuk layar di kiri; tombol di atas (avatar, Beranda, Chat) tetap bisa diketuk.
+**Geser antar layar utama** (Versi 2): urutan **Pengaturan ← Beranda → Chat → Roleplay** (tab Roleplay mulai Versi 3, lihat 14.1). Geser jari ke kiri untuk layar di kanan, ke kanan untuk layar di kiri; tombol di atas (avatar, Beranda, Chat) tetap bisa diketuk.
 - Tidak aktif kalau gerakan dimulai di tepi layar (dipakai gestur back Android), di kolom isian, atau di area yang bisa digeser ke samping (kartu Terbaru).
-- Tidak ada layar di arah itu: layar tertahan seperti karet, lalu kembali.
+- Layar sebelah ikut bergeser menempel jari (seperti ViewPager Android). Di layar paling ujung, layar tidak bergeser.
 - Riwayat: Beranda adalah akar. Back dari Chat atau Pengaturan selalu kembali ke Beranda, tidak bolak-balik antar tab.
 
 ---
@@ -303,7 +303,14 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 | 6 | **Pilih teks → tulis ulang:** tombol ✦ di bar format saat ada teks terpilih. Pilihan Perhalus / Perpanjang / Persingkat atau arahan sendiri. AI membaca brief, catatan cerita, teks sebelum dan sesudahnya. Hasil ditampilkan dulu (Ganti / Coba lagi / Batal); setelah diganti bisa di-Undo. | 2.1.0 |
 | 7 | **Lampiran PDF:** teks diambil langsung di HP dengan pdf.js (gratis, semua penyedia, juga offline), dikirim seperti file teks. PDF hasil scan (berupa gambar) diberi pesan "tidak ada teks"; OCR menyusul. | 2.1.0 |
 
-**Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat.
+**Versi 3 (Roleplay):** lihat bagian 14.
+
+| # | Fitur | Rilis |
+|---|---|---|
+| 1 | Tab Roleplay, karakter (tulis sendiri, buat dengan AI, impor kartu PNG/JSON), persona, chat roleplay dengan versi balasan, edit/hapus pesan, Bantu persona, memori chat, ringkasan pesan lama, lorebook, pengingat aturan, ekspor kartu, backup | 3.0.0 |
+| 2 | Group chat (beberapa karakter dalam satu chat), cabang chat dari pesan tertentu | menyusul |
+
+**Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat. Untuk Roleplay: galeri/berbagi karakter publik, script lorebook, suara (TTS).
 
 ---
 
@@ -326,3 +333,145 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 | Lampiran | Gambar (baca saja), file teks, dan PDF (teksnya) |
 | Pembuatan gambar | Tidak dibuat |
 | Penyedia AI | DeepSeek, Vikey, Poolside, OpenRouter bawaan, plus penyedia lain berformat OpenAI; model bisa diganti per pesan |
+| Modul roleplay | Versi 3, tab sendiri di kanan Chat, riwayat chat terpisah dari chat cerita |
+| Gaya roleplay | Bahasa Indonesia, narasi orang ketiga, AI tidak memerankan persona pengguna |
+| Kartu karakter | Format standar Character Card V2/V3 (PNG/JSON) supaya kartu dari Chub/SillyTavern bisa dipakai |
+
+---
+
+## 14. Versi 3: Modul Roleplay
+
+Bermain peran dengan karakter buatan sendiri, mirip Janitor AI dan SillyTavern, tetapi tetap lokal di HP dan memakai penyedia AI yang sama dengan modul cerita. Pembanding: [Janitor AI](https://janitorai.com), [SillyTavern](https://docs.sillytavern.app), [Character Card V2](https://github.com/malfoyslastname/character-card-spec-v2).
+
+### 14.1 Navigasi dan riwayat
+- **Tab baru Roleplay** (ikon 🎭) di kanan tab Chat: **Pengaturan ← Beranda → Chat → Roleplay**. Bisa digeser dan diketuk seperti tab lain. Back dari Roleplay kembali ke Beranda.
+- **Riwayat terpisah.** Tab Chat tetap hanya berisi chat cerita (chat utama, diskusi, chat bebas). Chat roleplay hanya ada di tab Roleplay dan di halaman karakternya. Alasannya, chat roleplay biasanya jauh lebih banyak dan panjang, dan dikelompokkan per karakter, bukan per cerita.
+- **Cari** juga menemukan karakter dan chat roleplay, dalam kelompok sendiri di bawah hasil cerita.
+- **Sampah** menampung karakter, persona, dan chat roleplay yang dihapus (30 hari), sama seperti cerita.
+
+```
+Tab Roleplay ─┬─ Halaman karakter ─┬─ Chat roleplay
+              │                    └─ Editor karakter ── Lorebook
+              ├─ Persona saya ── Editor persona
+              └─ Lorebook dunia
+```
+
+### 14.2 Tab Roleplay
+- **Atas:** baris tab yang sama (avatar, Beranda, Chat, Roleplay).
+- **Lanjutkan:** kartu horizontal chat roleplay terakhir: avatar karakter, nama, cuplikan pesan terakhir, waktu.
+- **Karakter:** daftar karakter (avatar, nama, tag, jumlah chat), urut terakhir dipakai. Yang di-pin di atas. Filter tag.
+- **Menu `⋯` / tahan lama karakter:** edit, pin, duplikat, ekspor kartu, hapus.
+- **Bar bawah:** 🔍 Cari · **＋ Karakter baru** · 👤 Persona saya.
+  - ＋ Karakter baru membuka sheet: **Tulis sendiri** · **Buat dengan AI** · **Impor kartu** (PNG/JSON).
+- **Kosong:** ajakan "Buat karakter pertama" dengan ketiga pilihan di atas.
+
+### 14.3 Halaman karakter
+- Avatar besar, nama, tag, dan **catatan pembuat** (kalau ada; tidak dikirim ke AI).
+- **Mulai chat:** kalau ada beberapa pesan pembuka, pilih dulu (bisa juga diganti di chat sebelum Anda membalas). Persona memakai persona yang diikat ke karakter ini, atau persona bawaan.
+- **Chat dengan karakter ini:** judul, cuplikan pesan terakhir, waktu. Tahan lama: ganti nama, duplikat, hapus.
+- **Menu `⋯`:** edit karakter, lorebook karakter, ekspor kartu (PNG/JSON), duplikat, hapus (chat-chatnya ikut ke Sampah).
+
+### 14.4 Editor karakter
+Kolom (label Indonesia, nama kolom kartu dalam kurung):
+
+| Kolom | Isi |
+|---|---|
+| Avatar | Foto dari galeri, dipotong persegi dan diperkecil |
+| Nama* (`name`) | Nama karakter, menggantikan `{{char}}` |
+| Tag (`tags`) | Untuk mengelompokkan |
+| Deskripsi (`description`) | Siapa dia: penampilan, latar, sifat, kebiasaan, cara bicara |
+| Kepribadian (`personality`) | Ringkasan sifat |
+| Skenario (`scenario`) | Situasi dan hubungan di awal roleplay |
+| Pesan pembuka (`first_mes`) + pembuka alternatif (`alternate_greetings`) | Bisa lebih dari satu; dipilih saat mulai chat |
+| Contoh dialog (`mes_example`) | Contoh gaya bicara, blok diawali `<START>` |
+| *Lanjutan (dilipat):* Instruksi sistem khusus (`system_prompt`) | Menggantikan instruksi roleplay bawaan kalau diisi |
+| *Lanjutan:* Pengingat aturan karakter (`post_history_instructions`) | Dikirim di akhir setiap permintaan |
+| *Lanjutan:* Catatan pembuat (`creator_notes`) | Tidak dikirim ke AI |
+| *Lanjutan:* Persona yang diikat | Persona yang otomatis dipakai di chat baru dengan karakter ini |
+
+- Perkiraan token kartu tampil di bawah, dengan peringatan kalau kartu sangat besar (mis. > 3.000 token).
+- **Buat dengan AI:** tulis ide singkat (mis. "gitaris band SMA yang sinis tapi peduli, latar Bandung 2005"), AI mengisi semua kolom. Hasilnya ditampilkan di editor untuk diperiksa, tidak langsung disimpan.
+- **✦ per kolom:** Kembangkan / Persingkat / Perbaiki satu kolom dengan AI (memakai mekanisme tulis ulang Versi 2).
+- **Terjemahkan ke bahasa Indonesia:** untuk kartu impor berbahasa lain. AI menerjemahkan semua kolom; hasilnya diperiksa dulu.
+- Penanda `{{char}}` dan `{{user}}` boleh dipakai di semua kolom.
+
+### 14.5 Persona
+- Persona = siapa Anda di roleplay: avatar, nama (menggantikan `{{user}}`), deskripsi (penampilan, sifat, latar, hal yang perlu diketahui karakter).
+- Boleh lebih dari satu. Satu ditandai **bawaan**.
+- **Buat dengan AI** dari ide singkat, sama seperti karakter.
+- Persona dipilih per chat (chip persona di kepala chat). Mengganti persona berlaku untuk pesan berikutnya.
+
+### 14.6 Chat roleplay
+- **Atas:** ‹ kembali, avatar + nama karakter, chip persona, `⋯`.
+- **Menu `⋯`:** Memori chat · Ringkasan pesan lama · Lorebook · Pengingat aturan chat · Panjang balasan · Ganti nama · Riwayat biaya · Hapus chat.
+- **Pesan:**
+  - Balasan karakter di kiri dengan avatar dan nama. Pesan Anda di kanan dengan avatar persona.
+  - Teks dirender: narasi biasa, dialog dalam tanda kutip, *miring* untuk pikiran atau penekanan, **tebal**.
+  - Pesan pembuka tampil sebagai balasan pertama karakter. Sebelum Anda membalas, pembuka bisa digeser untuk memilih pembuka lain.
+- **Balasan terakhir:** geser kiri/kanan (atau ‹ 2/5 ›) untuk melihat versi lain. Coba lagi membuat versi baru, maksimal 10 versi. Juga ada Salin, Lanjutkan (kalau terpotong), dan `⋯`.
+- **Tahan pesan:** Salin · Edit (semua pesan, milik Anda maupun karakter; mengedit pesan lama tidak menulis ulang pesan sesudahnya) · Hapus pesan ini · Hapus dari sini ke bawah · Coba lagi (balasan terakhir).
+- **Kolom ketik:** teks · chip model · tombol **✦ Bantu persona** · tombol kirim.
+  - **Bantu persona** (*impersonate*): AI menulis giliran Anda sebagai persona, sesuai alur terakhir. Kalau kolom ketik berisi arahan singkat (mis. "aku menolak dengan halus lalu pergi"), AI mengembangkannya. Hasil masuk ke **kolom ketik** untuk diedit, tidak langsung dikirim. Coba lagi dengan mengetuk tombolnya lagi.
+  - **✦ Perhalus pesanku:** di menu tahan pesan Anda yang belum dibalas, atau dari kolom ketik (pilih teks).
+  - Kolom kosong → tombol kirim menjadi **Lanjutkan**: karakter melanjutkan adegan tanpa giliran Anda.
+  - Selama AI menulis → tombol **Stop**. Teks yang sudah masuk tetap tersimpan.
+- **Panjang balasan** per chat: Pendek (±100–200 kata) · Normal (±250–400 kata, bawaan) · Panjang (±500–800 kata).
+- Draf, model, dan thinking mengikuti cara chat cerita (draf tersimpan otomatis, model terakhir diingat per chat).
+
+### 14.7 Memori
+- **Memori chat** (*chat memory*): catatan bebas per chat berisi hubungan, situasi sekarang, fakta yang sudah pasti, dan tujuan yang belum selesai. Bisa diedit dari menu chat. Setiap kira-kira 30 pesan, kolom ketik menawarkan **Perbarui memori**: AI mengusulkan memori baru dari pesan terbaru, Anda Terima atau Batal (mekanisme catatan cerita Versi 2).
+- **Ringkasan pesan lama:** mode Otomatis (bawaan; aktif kalau chat melewati 60% batas konteks model) · Selalu · Mati.
+  - Pesan lama diringkas per blok ±30 pesan. Setiap ringkasan dibuat sekali, disimpan (supaya tetap kena cache), dibuat ulang kalau ada pesan di blok itu yang diedit atau dihapus, dan bisa diedit.
+  - 30 pesan terakhir selalu dikirim utuh. Pesan pembuka selalu dikirim utuh.
+- **Lorebook:**
+  - **Lorebook karakter** (ikut kartu, ikut diekspor) dan **lorebook dunia** (berdiri sendiri, bisa dipasang ke beberapa karakter, mis. satu dunia untuk banyak karakter).
+  - Entri: judul, kata kunci (dipisah koma), isi, saklar aktif, saklar **selalu dikirim**, urutan prioritas.
+  - Entri dikirim kalau salah satu kata kuncinya muncul di 4 pesan terakhir atau di pesan yang sedang dikirim (huruf besar/kecil tidak dibedakan, kata utuh). Jangkauan bisa diubah per lorebook.
+  - Batas: entri yang cocok dikirim sampai 1.500 token (bisa diubah), urut prioritas. Sisanya dilewati, dengan penanda di info pesan.
+  - Info balasan (tahan → Info) menampilkan entri lorebook yang aktif saat balasan itu ditulis.
+
+### 14.8 Susunan pesan
+```
+system    : instruksi roleplay bawaan (atau instruksi sistem khusus kartu)
+            + kartu karakter (deskripsi, kepribadian, skenario)
+            + persona Anda
+            + contoh dialog
+            + entri lorebook "selalu dikirim"
+user      : [ringkasan pesan lama 1..n]        ← kalau ringkasan dipakai
+assistant : pesan pembuka
+user      : pesan Anda 1
+assistant : balasan 1 (versi yang dipilih)
+...
+user      : pesan Anda terbaru
+            + [entri lorebook yang cocok] + [memori chat]
+            + [pengingat aturan karakter/chat] + target panjang   ← tidak disimpan ke riwayat
+```
+- **Instruksi roleplay bawaan:** memerankan `{{char}}` dan tokoh lain di sekitarnya; bahasa Indonesia; narasi orang ketiga, dialog dalam tanda kutip; **tidak menulis aksi, ucapan, atau pikiran `{{user}}`**; tidak mengulang kalimat dari balasan sebelumnya; tidak keluar dari peran; mengakhiri balasan di titik yang memberi giliran ke `{{user}}`.
+- **Hemat cache:** bagian tetap di depan, riwayat menyambung (*append-only*), bagian yang berubah tiap giliran (lorebook yang cocok, memori, pengingat) hanya ditempel di pesan terakhir dan tidak disimpan. Mengedit kartu, persona, atau pesan lama membuat cache reset dari titik itu, untuk satu permintaan berikutnya.
+- **Bantu persona** memakai susunan yang sama, dengan instruksi terakhir "tulis giliran `{{user}}` berikutnya sesuai persona" dan hasilnya tidak disimpan ke riwayat.
+- `{{char}}` dan `{{user}}` diganti nama karakter dan persona saat dikirim. Isi kartu disimpan apa adanya.
+- Temperature mengikuti pengaturan kreativitas (sama dengan cerita). Thinking bawaan mati.
+
+### 14.9 Impor dan ekspor kartu
+- **Impor:** file PNG (data kartu di dalam gambar, chunk `chara` untuk V2 dan `ccv3` untuk V3) atau JSON. Diambil: nama, deskripsi, kepribadian, skenario, pembuka dan pembuka alternatif, contoh dialog, instruksi sistem, pengingat aturan (`post_history_instructions`), catatan pembuat, tag, dan lorebook karakter (`character_book`). Gambar PNG menjadi avatar.
+- Kolom yang tidak dipakai aplikasi (mis. `extensions`) tetap disimpan, supaya ekspor ulang tidak kehilangan data.
+- Setelah impor, editor terbuka untuk diperiksa. Kalau kartu bukan berbahasa Indonesia, editor menawarkan **Terjemahkan ke bahasa Indonesia**.
+- **Ekspor:** PNG (avatar + data kartu V2) dan JSON, lewat menu share atau simpan file.
+- Janitor AI tidak menyediakan unduhan kartu resmi, jadi karakter dari sana disalin manual ke editor.
+
+### 14.10 Data
+| Entitas | Isi utama |
+|---|---|
+| **Karakter** | id, nama, avatar (blob), kolom kartu (14.4), tag, persona yang diikat, lorebook dunia yang dipasang, data kartu tambahan, pin, dibuat/diubah/dipakai terakhir, dihapusPada |
+| **Persona** | id, nama, avatar, deskripsi, bawaan, dibuat/diubah, dihapusPada |
+| **Lorebook** | id, nama, milik karakter (characterId) atau dunia, jangkauan pindai, batas token, entri (judul, kata kunci, isi, aktif, selalu dikirim, prioritas) |
+| **Chat roleplay** | tabel Chat yang sudah ada, jenis `roleplay`: characterId, personaId, pembuka yang dipilih, memori, mode ringkasan, panjang balasan, pengingat aturan chat |
+| **Pesan** | tabel Pesan yang sudah ada; balasan karakter menyimpan versi (maks. 10) dan versi aktif |
+| **Ringkasan** | chatId, pesan pertama–terakhir yang diringkas, teks, waktu dibuat |
+
+- Backup, restore (gabungkan/ganti semua), dan backup otomatis APK ikut mencakup semua tabel baru.
+- Migrasi otomatis ke skema baru, dengan backup sebelum pembaruan seperti biasa.
+
+### 14.11 Biaya
+- Setiap balasan menampilkan biaya seperti chat cerita. Bantu persona, ringkasan, usulan memori, Buat dengan AI, dan terjemahan dicatat di **riwayat biaya** chat atau karakter.
+- Chat roleplay biasanya panjang, jadi peringatan batas konteks (85%) dan ringkasan otomatis (60%) sama pentingnya dengan di cerita.
