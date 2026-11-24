@@ -4,7 +4,7 @@ import { IconBack } from '../components/Icons';
 import { ConfirmSheet, Sheet, SheetItem, Toggle, toast } from '../components/ui';
 import { getSnapshotInfo, snapshotBlob, type SnapshotInfo } from '../lib/migrations';
 import { goBack } from '../lib/nav';
-import { goTab, useTabSwipe } from '../components/TabSwipe';
+import { goTab } from '../components/TabSwipe';
 import { isNative } from '../lib/native';
 import { AUTO_KEEP } from '../lib/autobackup';
 import { backupFileName, createBackup, markBackedUp, restoreBackup } from '../lib/backup';
@@ -74,7 +74,6 @@ export default function SettingsScreen() {
   const s = useSettings();
   const nav = useNavigate();
   const loc = useLocation();
-  const swipeRef = useTabSwipe('settings');
   const [storage, setStorage] = useState<{ used: string; persisted: boolean } | null>(null);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [confirmReplace, setConfirmReplace] = useState<File | null>(null);
@@ -99,7 +98,7 @@ export default function SettingsScreen() {
     document.getElementById(loc.hash.slice(1))?.scrollIntoView({ block: 'start' });
   }, [s, loc.hash]);
 
-  if (!s) return <div className="screen tab-screen" ref={swipeRef} />;
+  if (!s) return <div className="screen tab-screen" />;
   const set = (patch: Partial<Settings>) => void updateSettings(patch);
 
   const doBackup = async () => {
@@ -149,7 +148,7 @@ export default function SettingsScreen() {
   };
 
   return (
-    <div className="screen tab-screen" ref={swipeRef}>
+    <div className="screen tab-screen">
       <header className="page-header">
         <button
           className="icon-btn"

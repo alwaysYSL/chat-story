@@ -5,7 +5,6 @@ import { db, type Page } from '../db';
 import { IconChevron, IconChevronDown, IconMore, IconPlus } from '../components/Icons';
 import { PageMenu } from '../components/PageMenu';
 import { BottomBar, TopTabs } from '../components/ui';
-import { useTabSwipe } from '../components/TabSwipe';
 import { createChapter, displayTitle } from '../lib/pages';
 import { getLastChangeAt, useSettings } from '../lib/settings';
 import { formatNumber, timeAgo } from '../lib/util';
@@ -21,7 +20,6 @@ function excerpt(text: string): string {
 export default function Home() {
   const nav = useNavigate();
   const settings = useSettings();
-  const swipeRef = useTabSwipe('home');
   const pages = useLiveQuery(() => db.pages.filter((p) => !p.deletedAt).toArray(), []);
   const lastChange = useLiveQuery(getLastChangeAt, []);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -66,7 +64,7 @@ export default function Home() {
   const visibleRoots = showAll ? roots : roots.slice(0, PAGE_SIZE);
 
   return (
-    <div className="screen tab-screen" ref={swipeRef}>
+    <div className="screen tab-screen">
       <TopTabs />
       <div className="scroll-area">
         {needBackup && (
