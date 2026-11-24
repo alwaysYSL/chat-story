@@ -40,7 +40,7 @@ export interface ActiveGen {
   messageId: string;
   pageId: string | null;
   /** 'impersonate' = roleplay: AI menulis giliran persona ke kolom ketik */
-  mode: 'write' | 'discuss' | 'roleplay' | 'impersonate';
+  mode: 'write' | 'discuss' | 'roleplay' | 'impersonate' | 'convert';
   /** teks yang sudah ditulis (sudah dibersihkan) */
   live: string;
   words: number;

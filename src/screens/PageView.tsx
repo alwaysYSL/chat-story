@@ -57,6 +57,9 @@ export default function PageView() {
   const mainChat = useLiveQuery(async () => (rootId ? ((await getMainChat(rootId)) ?? null) : null), [rootId]);
   const gen = useActiveGen();
   const streamingHere = !!gen && gen.mode === 'write' && gen.pageId === id;
+  // "Jadikan cerita" dari roleplay sedang menulis ke page ini: kunci editor (tanpa widget aliran teks).
+  const convertingHere = !!gen && gen.mode === 'convert' && gen.pageId === id;
+  const lockedHere = streamingHere || convertingHere;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
@@ -288,7 +291,7 @@ export default function PageView() {
             }}
           />
 
-          {empty && !streamingHere && (
+          {empty && !lockedHere && (
             <div className="page-hint">
               {mainChat || isChapter
                 ? 'Halaman ini masih kosong. Ketik langsung, atau ketuk Ask AI untuk meminta AI menulis.'
@@ -299,7 +302,7 @@ export default function PageView() {
           <StoryEditor
             key={page.id}
             page={page}
-            editable={!streamingHere}
+            editable={!lockedHere}
             stream={stream}
             onFocusChange={setEditing}
             onReady={onEditorReady}
@@ -358,7 +361,18 @@ export default function PageView() {
         </div>
       )}
 
-      {streamingHere ? (
+      {convertingHere ? (
+        <div className="gen-bar">
+          <IconSparkle size={16} />
+          <span className="gen-text">Menjadikan cerita · {gen.status ?? ''}</span>
+          <button className="btn btn-small" onClick={() => nav(`/rp/chat/${gen.chatId}`)}>
+            <IconChat size={16} /> Chat
+          </button>
+          <button className="btn btn-small btn-danger" onClick={stopGeneration}>
+            <IconStop size={16} /> Stop
+          </button>
+        </div>
+      ) : streamingHere ? (
         <div className="gen-bar">
           <IconSparkle size={16} />
           <span className="gen-text">

@@ -358,19 +358,21 @@ export async function makeAvatar(file: Blob): Promise<Blob> {
 /** Gambar PNG untuk kartu: avatar, atau kotak berisi huruf awal nama. */
 async function avatarPng(c: Character): Promise<Blob> {
   const canvas = document.createElement('canvas');
-  canvas.width = AVATAR_SIDE;
-  canvas.height = Math.round(AVATAR_SIDE * 1.5);
   const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#2a2a2a';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  if (c.avatar) {
-    const bmp = await createImageBitmap(c.avatar);
-    const scale = Math.max(canvas.width / bmp.width, canvas.height / bmp.height);
-    const w = bmp.width * scale;
-    const h = bmp.height * scale;
-    ctx.drawImage(bmp, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+  const pic = c.photo ?? c.avatar;
+  if (pic) {
+    // Foto asli dengan proporsi aslinya (sisi terpanjang maks. 1024 px), seperti kartu Chub/SillyTavern.
+    const bmp = await createImageBitmap(pic);
+    const scale = Math.min(1, 1024 / Math.max(bmp.width, bmp.height));
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
     bmp.close();
   } else {
+    canvas.width = AVATAR_SIDE;
+    canvas.height = Math.round(AVATAR_SIDE * 1.5);
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#e6e6e5';
     ctx.font = `bold ${AVATAR_SIDE / 3}px sans-serif`;
     ctx.textAlign = 'center';

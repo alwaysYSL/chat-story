@@ -5,7 +5,8 @@ import { db, type Character } from '../../db';
 import { IconBook, IconChevron, IconCopy, IconEdit, IconImport, IconMore, IconPen, IconPin, IconPlus, IconSearch, IconShare, IconSparkle, IconTrash, IconUser } from '../../components/Icons';
 import { Avatar } from '../../components/rp/Avatar';
 import { ConfirmSheet, Sheet, SheetItem, toast, useLongPress } from '../../components/ui';
-import { cardFileName, cardJsonBlob, cardPngBlob, fillMacros, makeAvatar, readCardFile } from '../../lib/rp/cards';
+import { cardFileName, cardJsonBlob, cardPngBlob, fillMacros, readCardFile } from '../../lib/rp/cards';
+import { photoFromFile } from '../../lib/rp/photo';
 import { duplicateCharacter, importCard, ownLorebook, resolvePersona, saveCharacter, trashCharacter } from '../../lib/rp/data';
 import { downloadFile, shareFile, timeAgo } from '../../lib/util';
 
@@ -66,8 +67,9 @@ export default function RoleplayTab() {
     if (!f) return;
     try {
       const card = await readCardFile(f);
-      const avatar = card.image ? await makeAvatar(card.image).catch(() => null) : null;
-      const c = await importCard(card, avatar);
+      // Gambar kartu menjadi foto asli (dilihat utuh); avatar bulat dipotong darinya.
+      const pic = card.image ? await photoFromFile(card.image).catch(() => null) : null;
+      const c = await importCard(card, pic ?? { avatar: null });
       toast(`${c.name} diimpor${card.lorebook ? ` dengan ${card.lorebook.entries.length} entri lorebook` : ''}`);
       nav(`/rp/c/${c.id}/edit?imported=1`);
     } catch (e) {

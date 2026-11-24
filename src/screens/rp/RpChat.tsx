@@ -17,6 +17,11 @@ import {
   IconList,
   IconMore,
   IconNotes,
+  IconPage,
+  IconPen,
+  IconPin,
+  IconChat,
+  IconSearch,
   IconRetry,
   IconSend,
   IconSparkle,
@@ -34,9 +39,10 @@ import { trashChat } from '../../lib/pages';
 import { isPeak } from '../../lib/pricing';
 import { estimateTokens, findModel, usableModels, type ModelRef } from '../../lib/providers';
 import { polishTurn } from '../../lib/rp/assist';
+import { PinnedSheet, PreviewSheet, SearchSheet, StyleSheet, SuggestBar, ToStorySheet } from './RpChatTools';
 import { fillMacros } from '../../lib/rp/cards';
 import { blockHash, historyOf, messageText, RP_CONTEXT_OPTIONS, RP_DEFAULT_CONTEXT, RP_KEEP_FULL, rpAutoThreshold, summaryBlocks } from '../../lib/rp/context';
-import { ensureOwnLorebook, listPersonas, resolvePersona } from '../../lib/rp/data';
+import { branchRpChat, ensureOwnLorebook, listPersonas, resolvePersona, togglePin } from '../../lib/rp/data';
 import {
   continueRp,
   deleteRpMessages,
@@ -49,9 +55,11 @@ import {
   saveMemory,
   selectRpVersion,
   sendRp,
+  suggestReplies,
   summarizeNow,
 } from '../../lib/rp/engine';
-import { RP_LENGTH } from '../../lib/rp/prompts';
+import { DEFAULT_STYLE, RP_LENGTH } from '../../lib/rp/prompts';
+import type { RpStyle } from '../../db';
 import { markChanged, useSettings } from '../../lib/settings';
 import { copyText, debounce, formatNumber, formatRupiah, formatUsd } from '../../lib/util';
 
@@ -89,6 +97,13 @@ export default function RpChat() {
   const [editMsg, setEditMsg] = useState<Message | null>(null);
   const [info, setInfo] = useState<Message | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [styleOpen, setStyleOpen] = useState(false);
+  const [pinnedOpen, setPinnedOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [search, setSearch] = useState<null | { q: string; ids: string[]; i: number }>(null);
+  const [storyOpen, setStoryOpen] = useState(false);
+  const [suggest, setSuggest] = useState<null | { items: string[]; loading: boolean }>(null);
   const [polish, setPolish] = useState<null | { msgId: string | null; source: string; result: string | null }>(null);
   const [confirmDel, setConfirmDel] = useState<null | { msg?: Message; chat?: boolean }>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -154,7 +169,8 @@ export default function RpChat() {
   const lastSent = [...list].reverse().find((m) => m.role === 'user' && m.model);
   const lastUsed: ModelRef | null = lastSent ? { provider: lastSent.provider ?? 'deepseek', model: lastSent.model } : null;
   const firstUsable = usable[0] ? { provider: usable[0].provider.id, model: usable[0].model.id } : null;
-  const effModel = pickRef(model) ?? pickRef(lastUsed) ?? pickRef(settings.defaultModel) ?? firstUsable;
+  // Pilihan barusan → model terakhir di chat → model bawaan karakter → model default → yang pertama punya API key.
+  const effModel = pickRef(model) ?? pickRef(lastUsed) ?? pickRef(character.modelRef) ?? pickRef(settings.defaultModel) ?? firstUsable;
   const resolved = effModel ? findModel(settings.providers, effModel) : null;
   const effThinking = thinking ?? settings.thinking;
   const busy = !!gen;
@@ -209,6 +225,34 @@ export default function RpChat() {
       setText(before);
       handleError(e);
     }
+  };
+
+  const doSuggest = async () => {
+    const m = needModel();
+    if (!m || busy) return;
+    setSuggest({ items: [], loading: true });
+    try {
+      setSuggest({ items: await suggestReplies(id, m), loading: false });
+    } catch (e) {
+      setSuggest(null);
+      handleError(e);
+    }
+  };
+
+  /** Lompat ke pesan: pesan lama dimuat dulu kalau tersembunyi, lalu disorot sebentar. */
+  const jumpTo = (msgId: string) => {
+    const idx = list.findIndex((x) => x.id === msgId);
+    if (idx < 0) return;
+    const need = list.length - idx + 5;
+    if (need > windowSize) setWindowSize(need);
+    stick.current = false;
+    setTimeout(() => {
+      const el = listRef.current?.querySelector(`[data-mid="${CSS.escape(msgId)}"]`);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center' });
+      el.classList.add('flash');
+      setTimeout(() => el.classList.remove('flash'), 1600);
+    }, 60);
   };
 
   const doPolish = async (msgId: string | null, source: string) => {
@@ -290,14 +334,16 @@ export default function RpChat() {
           <IconBack />
         </button>
         <button className="rp-head" onClick={() => nav(`/rp/c/${character.id}`)}>
-          <Avatar blob={character.avatar} name={character.name} size={32} />
+          <Avatar blob={character.avatar} view={character.photo ?? character.avatar} name={character.name} size={32} />
           <span>
             <b>{character.name}</b>
-            <small>{chat.title !== character.name ? chat.title : `Balasan ${RP_LENGTH[length].label.toLowerCase()}`}</small>
+            <small>
+              {chat.branchOf ? `↳ cabang dari ${chat.branchOf.title}` : chat.title !== character.name ? chat.title : `Balasan ${RP_LENGTH[length].label.toLowerCase()}`}
+            </small>
           </span>
         </button>
         <button className="chip rp-persona-chip" aria-label="Ganti persona" onClick={() => setPersonaOpen(true)}>
-          <Avatar blob={persona?.avatar} name={userName} size={20} />
+          <Avatar blob={persona?.avatar} view={persona?.photo ?? persona?.avatar} name={userName} size={20} />
           <span className="chip-text">{userName}</span>
         </button>
         <button className="icon-btn" aria-label="Menu chat" onClick={() => setChatMenu(true)}>
@@ -340,7 +386,7 @@ export default function RpChat() {
         {list.slice(hidden).map((m) => {
           if (m.role === 'user') {
             if (!m.text.trim()) return <div key={m.id} className="rp-continue-mark">⋯ lanjutkan</div>;
-            return <UserTurn key={m.id} m={m} name={userName} avatar={persona?.avatar} onAction={onAction} />;
+            return <UserTurn key={m.id} m={m} name={userName} avatar={persona?.avatar} photo={persona?.photo ?? persona?.avatar} onAction={onAction} />;
           }
           const streaming = genHere && gen!.mode === 'roleplay' && gen!.messageId === m.id;
           const isLast = m.id === lastAsst?.id;
@@ -350,6 +396,7 @@ export default function RpChat() {
               m={m}
               name={character.name}
               avatar={character.avatar}
+              photo={character.photo ?? character.avatar}
               text={fill(streaming ? gen!.live : m.text)}
               streaming={streaming}
               status={streaming ? (gen!.status ?? (gen!.thinking && !gen!.live ? 'Sedang berpikir…' : null)) : null}
@@ -376,7 +423,38 @@ export default function RpChat() {
             <IconArrowBottom size={18} />
           </button>
         )}
-        {note}
+        {search && (
+          <div className="rp-search-pill">
+            <span>
+              “{search.q}” {search.i + 1}/{search.ids.length}
+            </span>
+            <button className="act-btn" aria-label="Hasil sebelumnya" disabled={search.i <= 0} onClick={() => { const i = search.i - 1; setSearch({ ...search, i }); jumpTo(search.ids[i]); }}>
+              ‹
+            </button>
+            <button className="act-btn" aria-label="Hasil berikutnya" disabled={search.i >= search.ids.length - 1} onClick={() => { const i = search.i + 1; setSearch({ ...search, i }); jumpTo(search.ids[i]); }}>
+              ›
+            </button>
+            <button className="act-btn" aria-label="Tutup pencarian" onClick={() => setSearch(null)}>
+              <IconClose size={14} />
+            </button>
+          </div>
+        )}
+        {suggest ? (
+          <SuggestBar
+            items={suggest.items}
+            loading={suggest.loading}
+            onPick={(t) => {
+              setText(t);
+              saveDraft(t);
+              setSuggest(null);
+              inputRef.current?.focus();
+            }}
+            onRefresh={() => void doSuggest()}
+            onClose={() => setSuggest(null)}
+          />
+        ) : (
+          note
+        )}
         <div className="composer-box">
           <textarea
             ref={inputRef}
@@ -401,7 +479,7 @@ export default function RpChat() {
               className="chip rp-help-chip"
               aria-label="Bantu persona"
               disabled={busy}
-              onClick={() => (empty ? void doImpersonate('') : setHelpOpen(true))}
+              onClick={() => setHelpOpen(true)}
             >
               <IconSparkle size={14} /> <span className="chip-text">Bantu</span>
             </button>
@@ -428,15 +506,25 @@ export default function RpChat() {
       <Sheet open={helpOpen} onClose={() => setHelpOpen(false)} title="Bantu AI">
         <SheetItem
           icon={<IconSparkle />}
-          label="Kembangkan jadi giliran utuh"
-          hint="Isi kolom ketik dipakai sebagai arahan Bantu persona"
+          label={empty ? 'Tulis giliranku' : 'Kembangkan jadi giliran utuh'}
+          hint={empty ? `AI menulis giliran ${userName} ke kolom ketik` : 'Isi kolom ketik dipakai sebagai arahan Bantu persona'}
           onClick={() => {
             setHelpOpen(false);
             void doImpersonate(text);
           }}
         />
         <SheetItem
+          icon={<IconList />}
+          label="Saran balasan"
+          hint="3 pilihan giliran singkat, pilih lalu edit"
+          onClick={() => {
+            setHelpOpen(false);
+            void doSuggest();
+          }}
+        />
+        <SheetItem
           icon={<IconText />}
+          disabled={empty}
           label="Perhalus pesanku"
           hint="Maksud sama, kalimat lebih enak"
           onClick={() => {
@@ -505,6 +593,14 @@ export default function RpChat() {
         onPolish={(m) => void doPolish(m.id, m.text)}
         onInfo={setInfo}
         onDelete={(m) => setConfirmDel({ msg: m })}
+        onPin={async (m) => toast((await togglePin(m.id)) ? 'Disematkan' : 'Semat dilepas')}
+        onBranch={async (m) => {
+          const nid = await branchRpChat(id, m.id);
+          if (nid) {
+            toast('Cabang dibuat');
+            nav(`/rp/chat/${nid}`);
+          }
+        }}
       />
 
       <PromptSheet
@@ -560,6 +656,8 @@ export default function RpChat() {
       </Sheet>
 
       <Sheet open={chatMenu} onClose={() => setChatMenu(false)} title={chat.title}>
+        <SheetItem icon={<IconSearch />} label="Cari di chat ini" onClick={() => { setChatMenu(false); setSearchOpen(true); }} />
+        <SheetItem icon={<IconPin />} label="Pesan tersemat" hint={`${list.filter((m) => m.pinned).length} pesan`} onClick={() => { setChatMenu(false); setPinnedOpen(true); }} />
         <SheetItem icon={<IconNotes />} label="Memori chat" hint={chat.memory?.trim() ? 'Terisi' : 'Belum diisi'} onClick={() => { setChatMenu(false); setMemoryOpen({ propose: false }); }} />
         <SheetItem icon={<IconList />} label="Ringkasan pesan lama" hint={summaryHint(chat.summaryMode)} onClick={() => { setChatMenu(false); setSummaryOpen(true); }} />
         <SheetItem
@@ -572,6 +670,10 @@ export default function RpChat() {
           }}
         />
         <SheetItem icon={<IconEdit />} label="Pengingat aturan chat" hint={chat.reminder?.trim() ? 'Terisi' : 'Dikirim di akhir setiap permintaan'} onClick={() => { setChatMenu(false); setReminderOpen(true); }} />
+        <SheetItem icon={<IconPen />} label="Gaya cerita" hint={styleHint(chat.rpStyle)} onClick={() => { setChatMenu(false); setStyleOpen(true); }} />
+        <SheetItem icon={<IconList />} label="Lihat yang dikirim ke AI" hint="Pratinjau permintaan berikutnya dan tokennya" onClick={() => { setChatMenu(false); setPreviewOpen(true); }} />
+        <SheetItem icon={<IconPage />} label="Jadikan cerita" hint="Tulis ulang sesi ini menjadi prosa di modul cerita" onClick={() => { setChatMenu(false); setStoryOpen(true); }} />
+        {chat.branchOf && <SheetItem icon={<IconChat />} label="Buka chat asal" hint={chat.branchOf.title} onClick={() => { setChatMenu(false); nav(`/rp/chat/${chat.branchOf!.chatId}`); }} />}
         <SheetItem icon={<IconText />} label="Panjang balasan" hint={`${RP_LENGTH[length].label} (${RP_LENGTH[length].min}–${RP_LENGTH[length].max} kata)`} onClick={() => { setChatMenu(false); setLengthOpen(true); }} />
         <SheetItem icon={<IconUser />} label="Persona" hint={userName} onClick={() => { setChatMenu(false); setPersonaOpen(true); }} />
         <SheetItem icon={<IconEdit />} label="Ganti nama chat" onClick={() => { setChatMenu(false); setRenameOpen(true); }} />
@@ -676,6 +778,36 @@ export default function RpChat() {
         )}
       </Sheet>
 
+      {previewOpen && <PreviewSheet chatId={id} text={text} model={effModel} onClose={() => setPreviewOpen(false)} />}
+      {styleOpen && <StyleSheet chat={chat} onClose={() => setStyleOpen(false)} />}
+      {pinnedOpen && (
+        <PinnedSheet
+          messages={list}
+          fill={fill}
+          names={{ char: character.name, user: userName }}
+          onJump={(m) => {
+            setPinnedOpen(false);
+            jumpTo(m.id);
+          }}
+          onUnpin={(m) => void togglePin(m.id)}
+          onClose={() => setPinnedOpen(false)}
+        />
+      )}
+      {searchOpen && (
+        <SearchSheet
+          messages={list}
+          fill={fill}
+          initial={search?.q ?? ''}
+          onPick={(q, res, i) => {
+            setSearchOpen(false);
+            setSearch({ q, ids: res.map((m) => m.id), i });
+            jumpTo(res[i].id);
+          }}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
+      {storyOpen && <ToStorySheet chat={chat} messages={list} model={effModel} onClose={() => setStoryOpen(false)} onOpenPage={(pid) => { setStoryOpen(false); nav(`/page/${pid}`); }} />}
+
       <ModelPicker
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
@@ -690,6 +822,12 @@ export default function RpChat() {
   );
 }
 
+function styleHint(st: RpStyle | undefined): string {
+  const x = { ...DEFAULT_STYLE, ...st };
+  const pov = { third: 'Orang ketiga', second: 'Orang kedua', first: 'Orang pertama' }[x.pov];
+  return [pov, x.role === 'narrator' ? 'narator' : '', x.pace !== 'medium' ? (x.pace === 'slow' ? 'lambat' : 'cepat') : '', x.register !== 'santai' ? x.register : ''].filter(Boolean).join(' · ');
+}
+
 function summaryHint(mode: string | undefined): string {
   return mode === 'always' ? 'Selalu' : mode === 'off' ? 'Mati' : 'Otomatis';
 }
@@ -697,20 +835,21 @@ function summaryHint(mode: string | undefined): string {
 /* ---------- Pesan ---------- */
 
 const UserTurn = memo(
-  function UserTurn({ m, name, avatar, onAction }: { m: Message; name: string; avatar: Blob | null | undefined; onAction: (k: TurnAction, m: Message) => void }) {
+  function UserTurn({ m, name, avatar, photo, onAction }: { m: Message; name: string; avatar: Blob | null | undefined; photo?: Blob | null; onAction: (k: TurnAction, m: Message) => void }) {
     const lp = useLongPress(() => onAction('menu', m));
     return (
-      <div className="msg user rp-turn">
+      <div className="msg user rp-turn" data-mid={m.id}>
         <div className="rp-turn-row">
+          {m.pinned && <span className="rp-pin" aria-label="Disematkan">📌</span>}
           <div className="bubble pressable rp-user-bubble" {...lp}>
             <Md text={m.text} />
           </div>
-          <Avatar blob={avatar} name={name} size={28} />
+          <Avatar blob={avatar} view={photo} name={name} size={28} />
         </div>
       </div>
     );
   },
-  (a, b) => a.m.id === b.m.id && a.m.text === b.m.text && a.name === b.name && a.avatar === b.avatar,
+  (a, b) => a.m.id === b.m.id && a.m.text === b.m.text && a.m.pinned === b.m.pinned && a.name === b.name && a.avatar === b.avatar && a.photo === b.photo,
 );
 
 /** MarkdownView dengan hasil parse yang diingat. */
@@ -723,6 +862,7 @@ const AiTurn = memo(
     m,
     name,
     avatar,
+    photo,
     text,
     streaming,
     status,
@@ -735,6 +875,7 @@ const AiTurn = memo(
     m: Message;
     name: string;
     avatar: Blob | null;
+    photo?: Blob | null;
     text: string;
     streaming: boolean;
     status: string | null;
@@ -760,10 +901,11 @@ const AiTurn = memo(
       .filter(Boolean)
       .join(' · ');
     return (
-      <div className="msg ai rp-turn">
+      <div className="msg ai rp-turn" data-mid={m.id}>
         <div className="rp-turn-head">
-          <Avatar blob={avatar} name={name} size={28} />
+          <Avatar blob={avatar} view={photo} name={name} size={28} />
           <span>{name}</span>
+          {m.pinned && <span className="rp-pin" aria-label="Disematkan">📌</span>}
           {m.greeting && <small>pembuka</small>}
         </div>
         <div
@@ -842,6 +984,8 @@ const AiTurn = memo(
     (a.m.lore?.length ?? 0) === (b.m.lore?.length ?? 0) &&
     a.name === b.name &&
     a.avatar === b.avatar &&
+    a.photo === b.photo &&
+    a.m.pinned === b.m.pinned &&
     a.text === b.text &&
     a.streaming === b.streaming &&
     a.status === b.status &&
@@ -863,6 +1007,8 @@ function MessageMenu({
   onPolish,
   onInfo,
   onDelete,
+  onPin,
+  onBranch,
 }: {
   m: Menu;
   isLastAsst: boolean;
@@ -875,6 +1021,8 @@ function MessageMenu({
   onPolish: (m: Message) => void;
   onInfo: (m: Message) => void;
   onDelete: (m: Message) => void;
+  onPin: (m: Message) => void;
+  onBranch: (m: Message) => void;
 }) {
   const act = (fn: (m: Message) => void) => () => {
     if (!m) return;
@@ -889,6 +1037,8 @@ function MessageMenu({
           <SheetItem icon={<IconEdit />} label="Edit" disabled={busy} onClick={act(onEdit)} />
           {isLastAsst && !m.greeting && <SheetItem icon={<IconRetry />} label="Coba lagi" hint="Versi baru (maks. 10)" disabled={busy} onClick={act(onRetry)} />}
           {isLastUser && <SheetItem icon={<IconSparkle />} label="Perhalus dengan AI" disabled={busy} onClick={act(onPolish)} />}
+          <SheetItem icon={<IconPin />} label={m.pinned ? 'Lepas semat' : 'Sematkan'} hint={m.pinned ? undefined : 'Mudah ditemukan; tetap dibaca AI walau sudah lama'} onClick={act(onPin)} />
+          <SheetItem icon={<IconCopy />} label="Buat cabang dari sini" hint="Chat baru sampai pesan ini, untuk mencoba alur lain" disabled={busy} onClick={act(onBranch)} />
           {m.role === 'assistant' && !m.greeting && <SheetItem icon={<IconList />} label="Info" hint="Model, biaya, lorebook aktif" onClick={act(onInfo)} />}
           <SheetItem icon={<IconTrash />} label="Hapus…" danger disabled={busy} onClick={act(onDelete)} />
         </>

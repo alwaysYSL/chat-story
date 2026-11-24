@@ -90,7 +90,7 @@ export default function CharacterView() {
       </header>
       <div className="scroll-area">
         <div className="rp-profile">
-          <Avatar blob={c.avatar} name={c.name} size={112} />
+          <Avatar blob={c.avatar} view={c.photo ?? c.avatar} name={c.name} size={112} />
           <h1>{c.name}</h1>
           {c.tags.length > 0 && (
             <div className="tag-row center">
@@ -249,8 +249,12 @@ function ChatRow({ chat, last, onOpen, onMenu }: { chat: Chat; last: string; onO
   return (
     <li className="chat-row">
       <button className="chat-main pressable" onClick={onOpen} {...lp}>
-        <span className="chat-title">{chat.title}</span>
+        <span className="chat-title">
+          {chat.branchOf ? '↳ ' : ''}
+          {chat.title}
+        </span>
         <small>
+          {chat.branchOf ? `cabang dari ${chat.branchOf.title} · ` : ''}
           {timeAgo(chat.updatedAt)}
           {s ? ` · ${s.length > 70 ? '…' + s.slice(-70) : s}` : ''}
         </small>

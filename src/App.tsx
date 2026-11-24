@@ -25,6 +25,7 @@ import Personas from './screens/rp/Personas';
 import LorebookView, { WorldLorebooks } from './screens/rp/LorebookView';
 import RpChat from './screens/rp/RpChat';
 import { purgeRpTrash } from './lib/rp/data';
+import { PhotoViewer } from './components/rp/PhotoViewer';
 
 function Startup() {
   useEffect(() => {
@@ -129,6 +130,7 @@ export default function App() {
       </Gate>
       <UpdateBanner />
       <ToastHost />
+      <PhotoViewer />
     </HashRouter>
   );
 }

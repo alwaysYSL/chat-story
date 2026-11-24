@@ -39,9 +39,9 @@ export async function saveCharacter(c: Character): Promise<void> {
   markChanged();
 }
 
-export async function importCard(card: ImportedCard, avatar: Blob | null): Promise<Character> {
+export async function importCard(card: ImportedCard, pic: { avatar: Blob | null; photo?: Blob | null; crop?: Character['crop'] }): Promise<Character> {
   const now = Date.now();
-  const c: Character = { ...card.character, avatar, createdAt: now, updatedAt: now, usedAt: 0 };
+  const c: Character = { ...card.character, avatar: pic.avatar, photo: pic.photo ?? null, crop: pic.crop ?? null, createdAt: now, updatedAt: now, usedAt: 0 };
   await db.transaction('rw', db.characters, db.lorebooks, async () => {
     await db.characters.add(c);
     if (card.lorebook) await db.lorebooks.add({ ...card.lorebook, createdAt: now, updatedAt: now });
@@ -237,4 +237,51 @@ export async function duplicateRpChat(chatId: string): Promise<string | null> {
   });
   markChanged();
   return id;
+}
+
+/**
+ * Cabang chat: chat baru berisi semua pesan sampai pesan yang dipilih (termasuk versi balasan),
+ * memori, pengingat, gaya, persona, dan ringkasan blok yang tersalin utuh.
+ */
+export async function branchRpChat(chatId: string, msgId: string): Promise<string | null> {
+  const chat = await db.chats.get(chatId);
+  const at = await db.messages.get(msgId);
+  if (!chat || !at) return null;
+  const now = Date.now();
+  const id = uid();
+  const msgs = (await rpMessages(chatId)).filter((m) => m.seq <= at.seq);
+  const ids = new Map(msgs.map((m) => [m.id, uid()]));
+  const sums = (await db.rpSummaries.where('chatId').equals(chatId).toArray()).filter((s) => s.toSeq <= at.seq);
+  await db.transaction('rw', db.chats, db.messages, db.rpSummaries, async () => {
+    await db.chats.add({
+      ...chat,
+      id,
+      title: `${chat.title} (cabang)`,
+      titleAuto: false,
+      branchOf: { chatId, title: chat.title, seq: at.seq },
+      memoryAtCount: Math.min(chat.memoryAtCount ?? 0, msgs.length),
+      draft: '',
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    });
+    const copies = msgs.map((m) => ({ ...m, id: ids.get(m.id)!, chatId: id, status: m.status === 'streaming' ? ('done' as const) : m.status }));
+    await db.messages.bulkAdd(copies);
+    for (const s of sums) {
+      const inRange = (list: Message[]) => list.filter((m) => m.seq >= s.fromSeq && m.seq <= s.toSeq && m.status !== 'canceled' && (m.role === 'user' || m.text.trim()));
+      if (blockHash(inRange(msgs)) !== s.hash) continue;
+      await db.rpSummaries.add({ ...s, id: uid(), chatId: id, hash: blockHash(inRange(copies)) });
+    }
+  });
+  markChanged();
+  return id;
+}
+
+export async function togglePin(msgId: string): Promise<boolean> {
+  const m = await db.messages.get(msgId);
+  if (!m) return false;
+  const pinned = !m.pinned;
+  await db.messages.update(msgId, { pinned });
+  markChanged();
+  return pinned;
 }

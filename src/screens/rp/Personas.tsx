@@ -1,15 +1,15 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, type Persona } from '../../db';
 import { useSettings } from '../../lib/settings';
 import { formatRupiah } from '../../lib/util';
-import { IconBack, IconImage, IconPlus, IconSparkle } from '../../components/Icons';
+import { IconBack, IconPlus, IconSparkle } from '../../components/Icons';
+import { AvatarPicker } from '../../components/rp/AvatarPicker';
 import { Avatar } from '../../components/rp/Avatar';
 import { ConfirmSheet, Sheet, Toggle, toast } from '../../components/ui';
 import { goBack } from '../../lib/nav';
 import { generatePersona, improveField } from '../../lib/rp/assist';
-import { makeAvatar } from '../../lib/rp/cards';
 import { emptyPersona, listPersonas, savePersona, trashPersona } from '../../lib/rp/data';
 
 export default function Personas() {
@@ -64,7 +64,7 @@ export function PersonaEditor({ initial, onClose, onSaved }: { initial: Persona;
   const [idea, setIdea] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const exists = !!useLiveQuery(async () => (await listPersonas()).some((x) => x.id === initial.id), [initial.id]);
   const ai = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -81,28 +81,18 @@ export function PersonaEditor({ initial, onClose, onSaved }: { initial: Persona;
       <Sheet open={!confirm} onClose={onClose} title={exists ? 'Edit persona' : 'Persona baru'}>
         <div className="form-pad">
           <div className="rp-edit-top">
-            <button className="rp-avatar-btn" aria-label="Ganti foto" onClick={() => fileRef.current?.click()}>
-              <Avatar blob={p.avatar} name={p.name || '?'} size={64} />
-              <span className="rp-avatar-cam">
-                <IconImage size={14} />
-              </span>
-            </button>
+            <AvatarPicker
+              value={{ avatar: p.avatar, photo: p.photo, crop: p.crop }}
+              name={p.name}
+              size={64}
+              onBusy={setPhotoBusy}
+              onChange={(v) => setP({ ...p, avatar: v.avatar, photo: v.photo ?? null, crop: v.crop ?? null })}
+            />
             <div className="field rp-name">
               <span>Nama*</span>
               <input className="input" value={p.name} placeholder="Nama Anda di roleplay" onChange={(e) => setP({ ...p, name: e.target.value })} />
             </div>
           </div>
-          <input
-            ref={fileRef}
-            type="file"
-            hidden
-            accept="image/*"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              e.target.value = '';
-              if (f) setP({ ...p, avatar: await makeAvatar(f).catch(() => p.avatar) });
-            }}
-          />
           <div className="field">
             <span className="rp-field-head">
               <span>Deskripsi</span>
@@ -157,7 +147,7 @@ export function PersonaEditor({ initial, onClose, onSaved }: { initial: Persona;
           </button>
           <button
             className="btn btn-primary"
-            disabled={busy}
+            disabled={busy || photoBusy}
             onClick={async () => {
               if (!p.name.trim()) {
                 toast('Isi nama persona dulu.');

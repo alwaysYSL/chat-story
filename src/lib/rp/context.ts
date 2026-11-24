@@ -4,7 +4,7 @@ import { mergeSameRole } from '../context';
 import { estimateTokens } from '../providers';
 import { depthPrompt, fillMacros } from './cards';
 import { resolvePersona } from './data';
-import { CONTINUE_INSTR, impersonateInstr, lengthInstr, loreBlock, memoryBlock, reminderBlock, summaryBlock, SYSTEM_RP } from './prompts';
+import { CONTINUE_INSTR, impersonateInstr, lengthInstr, loreBlock, memoryBlock, reminderBlock, styleBlock, suggestInstr, summaryBlock, systemRp } from './prompts';
 
 /** Semua yang dibutuhkan untuk menyusun permintaan roleplay. */
 export interface RpWorld {
@@ -49,9 +49,16 @@ export function historyOf(messages: Message[], beforeSeq = Infinity): Message[] 
 
 /* ---------- Bagian tetap (system) ---------- */
 
-export function systemText(w: RpWorld): string {
+export interface PromptPart {
+  key: string;
+  label: string;
+  text: string;
+}
+
+/** Bagian tetap di system, berlabel (dipakai juga oleh "Lihat yang dikirim ke AI"). */
+export function systemParts(w: RpWorld): PromptPart[] {
   const c = w.character;
-  const parts = [c.systemPrompt.trim() || SYSTEM_RP];
+  const parts: PromptPart[] = [{ key: 'instr', label: c.systemPrompt.trim() ? 'Instruksi sistem kartu' : 'Instruksi roleplay', text: c.systemPrompt.trim() || systemRp(w.chat.rpStyle) }];
   const card = [
     `[Karakter: {{char}}]`,
     c.description.trim() && `Deskripsi:\n${c.description.trim()}`,
@@ -59,16 +66,22 @@ export function systemText(w: RpWorld): string {
   ]
     .filter(Boolean)
     .join('\n');
-  parts.push(card);
-  if (c.scenario.trim()) parts.push(`[Skenario]\n${c.scenario.trim()}`);
+  parts.push({ key: 'card', label: 'Kartu karakter', text: card });
+  if (c.scenario.trim()) parts.push({ key: 'scenario', label: 'Skenario', text: `[Skenario]\n${c.scenario.trim()}` });
   if (w.persona && (w.persona.description.trim() || w.persona.name.trim())) {
-    parts.push(`[Persona {{user}}, tokoh yang dimainkan pengguna]\n${w.persona.description.trim() || '(tanpa deskripsi)'}`);
+    parts.push({ key: 'persona', label: 'Persona', text: `[Persona {{user}}, tokoh yang dimainkan pengguna]\n${w.persona.description.trim() || '(tanpa deskripsi)'}` });
   }
   const ex = c.mesExample.trim().replace(/<START>/gi, '---').trim();
-  if (ex) parts.push(`[Contoh gaya bicara. Hanya contoh, bukan bagian cerita.]\n${ex}`);
+  if (ex) parts.push({ key: 'example', label: 'Contoh dialog', text: `[Contoh gaya bicara. Hanya contoh, bukan bagian cerita.]\n${ex}` });
   const constant = w.books.flatMap((b) => b.entries.filter((e) => e.enabled && e.constant && e.content.trim()));
-  if (constant.length) parts.push(loreBlock(constant.sort((a, b) => b.priority - a.priority)));
-  return macro(w, parts.join('\n\n'));
+  if (constant.length) parts.push({ key: 'lore-const', label: 'Lore selalu dikirim', text: loreBlock(constant.sort((a, b) => b.priority - a.priority)) });
+  return parts.map((x) => ({ ...x, text: macro(w, x.text) }));
+}
+
+export function systemText(w: RpWorld): string {
+  return systemParts(w)
+    .map((p) => p.text)
+    .join('\n\n');
 }
 
 /* ---------- Lorebook ---------- */
@@ -211,58 +224,97 @@ export function transcript(w: Pick<RpWorld, 'character' | 'persona'>, msgs: Mess
 export interface BuildOptions {
   /** hanya pesan sebelum seq ini (untuk Coba lagi: balasan yang ditulis ulang dan sesudahnya tidak ikut) */
   beforeSeq?: number;
-  mode: 'reply' | 'impersonate';
+  /** reply = balasan karakter; impersonate = Bantu persona; suggest = saran balasan */
+  mode: 'reply' | 'impersonate' | 'suggest';
   /** arahan Bantu persona */
   hint?: string;
   length: RpLength;
-  /** ringkasan yang dipakai: fromSeq → teks */
-  summaries?: Map<number, string>;
+  /** ringkasan yang dipakai: fromSeq → teks dan akhir bloknya */
+  summaries?: Map<number, { text: string; toSeq: number }>;
 }
 
 export interface BuiltRp {
   messages: ApiMessage[];
   lore: string[];
   loreSkipped: number;
+  /** bagian-bagian permintaan untuk pratinjau */
+  parts: PromptPart[];
+  /** jumlah pesan riwayat yang dikirim utuh / blok ringkasan */
+  historyCount: number;
+  summaryCount: number;
 }
+
+export const PINNED_BUDGET = 1500;
 
 export function buildRp(w: RpWorld, o: BuildOptions): BuiltRp {
   const history = historyOf(w.messages, o.beforeSeq);
-  const out: ApiMessage[] = [{ role: 'system', content: systemText(w) }];
-  const blocks = o.summaries?.size ? summaryBlocks(history).filter((b) => o.summaries!.has(b.fromSeq)) : [];
+  const sys = systemParts(w);
+  const out: ApiMessage[] = [{ role: 'system', content: sys.map((p) => p.text).join('\n\n') }];
+  const anchors = [...(o.summaries ?? new Map())].map(([fromSeq, v]) => ({ fromSeq, toSeq: v.toSeq }));
+  const blocks = o.summaries?.size ? summaryBlocks(history, anchors).filter((b) => o.summaries!.has(b.fromSeq)) : [];
   const inBlock = new Map<string, SummaryBlockRef>();
   for (const b of blocks) for (const m of b.msgs) inBlock.set(m.id, b);
   const done = new Set<number>();
+  const sumTexts: string[] = [];
+  const histTexts: string[] = [];
   for (const m of history) {
     const b = inBlock.get(m.id);
     if (b) {
       if (!done.has(b.fromSeq)) {
         done.add(b.fromSeq);
-        out.push({ role: 'user', content: summaryBlock(o.summaries!.get(b.fromSeq)!) });
+        const t = summaryBlock(o.summaries!.get(b.fromSeq)!.text);
+        sumTexts.push(t);
+        out.push({ role: 'user', content: t });
       }
       continue;
     }
-    out.push({ role: m.role, content: macro(w, messageText(m)) });
+    const t = macro(w, messageText(m));
+    histTexts.push(t);
+    out.push({ role: m.role, content: t });
   }
 
-  const pending = o.mode === 'impersonate' ? (o.hint ?? '') : '';
+  const pending = o.mode !== 'reply' ? (o.hint ?? '') : '';
   const lore = matchLore(w.books, history, pending, w);
-  const extras: string[] = [];
-  if (lore.hits.length) extras.push(macro(w, loreBlock(lore.hits)));
-  if (w.chat.memory?.trim()) extras.push(macro(w, memoryBlock(w.chat.memory.trim())));
-  if (o.mode === 'impersonate') {
-    extras.push(macro(w, impersonateInstr(o.hint ?? '')));
-    out.push({ role: 'user', content: extras.join('\n\n') });
+  const extras: PromptPart[] = [];
+  if (lore.hits.length) extras.push({ key: 'lore', label: `Lore yang cocok (${lore.hits.length})`, text: macro(w, loreBlock(lore.hits)) });
+  if (w.chat.memory?.trim()) extras.push({ key: 'memory', label: 'Memori chat', text: macro(w, memoryBlock(w.chat.memory.trim())) });
+  // Pesan tersemat yang sudah masuk ringkasan dikirim apa adanya (yang terbaru didahulukan, dibatasi token).
+  const pinned = history.filter((m) => m.pinned && inBlock.has(m.id)).reverse();
+  const moments: string[] = [];
+  let used = 0;
+  const n = names(w);
+  for (const m of pinned) {
+    const t = `${m.role === 'user' ? n.user : n.char}: ${macro(w, messageText(m))}`;
+    const tk = estimateTokens(t.length);
+    if (used + tk > PINNED_BUDGET) break;
+    used += tk;
+    moments.unshift(t);
+  }
+  if (moments.length) extras.push({ key: 'pinned', label: `Momen tersemat (${moments.length})`, text: `[Momen penting yang disematkan pengguna]\n${moments.join('\n\n')}` });
+  const style = styleBlock(w.chat.rpStyle);
+  if (o.mode === 'impersonate' || o.mode === 'suggest') {
+    if (style) extras.push({ key: 'style', label: 'Gaya', text: macro(w, style) });
+    extras.push({ key: 'instr-end', label: o.mode === 'suggest' ? 'Instruksi saran balasan' : 'Instruksi Bantu persona', text: macro(w, o.mode === 'suggest' ? suggestInstr() : impersonateInstr(o.hint ?? '')) });
+    out.push({ role: 'user', content: extras.map((e) => e.text).join('\n\n') });
   } else {
     // depth_prompt dari kartu SillyTavern ikut di akhir (bukan di kedalaman tertentu), supaya riwayat tetap kena cache.
     const reminders = [w.character.postHistory.trim(), depthPrompt(w.character).trim(), w.chat.reminder?.trim() ?? ''].filter(Boolean);
-    if (reminders.length) extras.push(macro(w, reminderBlock(reminders.join('\n'))));
-    extras.push(macro(w, lengthInstr(o.length)));
+    if (reminders.length) extras.push({ key: 'reminder', label: 'Pengingat aturan', text: macro(w, reminderBlock(reminders.join('\n'))) });
+    if (style) extras.push({ key: 'style', label: 'Gaya', text: macro(w, style) });
+    extras.push({ key: 'length', label: 'Target panjang', text: macro(w, lengthInstr(o.length)) });
+    const joined = extras.map((e) => e.text).join('\n\n');
     const last = out[out.length - 1];
     // Ditempel ke giliran terakhir pengguna; tidak disimpan ke riwayat (cache tetap kena).
-    if (last.role === 'user' && typeof last.content === 'string') last.content = `${last.content}\n\n${extras.join('\n\n')}`;
-    else out.push({ role: 'user', content: extras.join('\n\n') });
+    if (last.role === 'user' && typeof last.content === 'string') last.content = `${last.content}\n\n${joined}`;
+    else out.push({ role: 'user', content: joined });
   }
-  return { messages: mergeSameRole(out), lore: lore.hits.map((e) => e.title), loreSkipped: lore.skipped };
+  const parts: PromptPart[] = [
+    ...sys,
+    ...(sumTexts.length ? [{ key: 'summaries', label: `Ringkasan (${sumTexts.length} blok)`, text: sumTexts.join('\n\n') }] : []),
+    { key: 'history', label: `Riwayat (${histTexts.length} pesan)`, text: histTexts.join('\n\n') },
+    ...extras,
+  ];
+  return { messages: mergeSameRole(out), lore: lore.hits.map((e) => e.title), loreSkipped: lore.skipped, parts, historyCount: histTexts.length, summaryCount: sumTexts.length };
 }
 
 /** Perkiraan token seluruh konteks chat (tanpa ringkasan). */

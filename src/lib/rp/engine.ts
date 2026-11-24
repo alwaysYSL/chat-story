@@ -2,7 +2,7 @@ import { db, type Chat, type Message, type RpLength, type UsageLog, type Version
 import { ApiError, streamChat, type ApiMessage } from '../api';
 import { beginGen, currentGen, endGen, exclusive, patchGen, stopGeneration, UserError } from '../generate';
 import { costUsd, isPeak } from '../pricing';
-import { findModel, PROVIDER_INFO, usableModels, type ModelRef } from '../providers';
+import { estimateTokens, findModel, PROVIDER_INFO, usableModels, type ModelRef } from '../providers';
 import { getSettings, markChanged, temperatureFor, type Settings } from '../settings';
 import { countWords, uid } from '../util';
 import {
@@ -34,12 +34,17 @@ export async function rpModel(chatId: string | null, pick?: ModelRef | null): Pr
   const usable = usableModels(s.providers);
   const ok = (r: ModelRef | null | undefined) => (r && usable.some((u) => u.provider.id === r.provider && u.model.id === r.model) ? r : null);
   let last: ModelRef | null = null;
+  let charModel: ModelRef | null = null;
   if (chatId) {
     const msgs = await db.messages.where('chatId').equals(chatId).sortBy('seq');
     const m = [...msgs].reverse().find((x) => x.role === 'user' && x.model);
     if (m) last = { provider: m.provider ?? 'deepseek', model: m.model };
+    const chat = await db.chats.get(chatId);
+    const c = chat?.characterId ? await db.characters.get(chat.characterId) : undefined;
+    charModel = c?.modelRef ?? null;
   }
-  const r = ok(pick) ?? ok(last) ?? ok(s.defaultModel) ?? (usable[0] ? { provider: usable[0].provider.id, model: usable[0].model.id } : null);
+  // Urutan: pilihan barusan → model terakhir di chat → model bawaan karakter → model default.
+  const r = ok(pick) ?? ok(last) ?? ok(charModel) ?? ok(s.defaultModel) ?? (usable[0] ? { provider: usable[0].provider.id, model: usable[0].model.id } : null);
   if (!r) throw new UserError('nokey', 'Belum ada penyedia AI dengan API key. Atur di Pengaturan → Penyedia AI.');
   return r;
 }
@@ -240,7 +245,7 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
         model: resolved.model,
         messages,
         thinking,
-        temperature: temperatureFor(resolved.provider, resolved.model, s.creativity),
+        temperature: temperatureFor(resolved.provider, resolved.model, w.character.creativity ?? s.creativity),
         maxTokens: rpMaxTokens(length, thinking),
         prefix: usePrefix,
       },
@@ -393,7 +398,7 @@ export function impersonate(chatId: string, hint: string, model: ModelRef, onLiv
       const summaries = await prepareSummaries(w, r.model.context, signal);
       const built = buildRp(w, { mode: 'impersonate', hint, length: w.chat.rpLength ?? 'normal', summaries });
       const res = await streamChat(
-        { provider: r.provider, model: r.model, messages: built.messages, thinking: false, temperature: temperatureFor(r.provider, r.model, s.creativity), maxTokens: 900 },
+        { provider: r.provider, model: r.model, messages: built.messages, thinking: false, temperature: temperatureFor(r.provider, r.model, w.character.creativity ?? s.creativity), maxTokens: 900 },
         (d, k) => {
           if (k !== 'content') return;
           text += d;
@@ -516,18 +521,32 @@ export async function dismissMemoryOffer(chatId: string): Promise<void> {
 /* ---------- Ringkasan pesan lama ---------- */
 
 /** Ringkasan yang dipakai untuk permintaan ini (dibuat dulu kalau belum ada / usang). Gagal = pesan dikirim utuh. */
-async function prepareSummaries(w: RpWorld, contextLimit: number | undefined, signal: AbortSignal): Promise<Map<number, string>> {
+type SummaryMap = Map<number, { text: string; toSeq: number }>;
+
+/**
+ * `dry` (untuk pratinjau): tidak membuat ringkasan baru, hanya memakai yang tersimpan;
+ * `missing` = jumlah blok yang akan diringkas dulu saat benar-benar dikirim.
+ */
+async function prepareSummaries(w: RpWorld, contextLimit: number | undefined, signal: AbortSignal, dry = false): Promise<SummaryMap & { missing?: number }> {
   const mode = w.chat.summaryMode ?? 'auto';
-  const out = new Map<number, string>();
+  const out: SummaryMap & { missing?: number } = new Map();
   if (mode === 'off') return out;
   if (mode === 'auto' && !(estimateRp(w) > rpAutoThreshold(w.chat, contextLimit))) return out;
   const rows = await db.rpSummaries.where('chatId').equals(w.chat.id).toArray();
   const history = historyOf(w.messages);
   const blocks = summaryBlocks(history, rows);
-  await dropOrphanSummaries(rows, history);
+  if (!dry) await dropOrphanSummaries(rows, history);
   if (!blocks.length) return out;
   const stored = new Map(rows.map((s) => [s.fromSeq, s]));
   const todo = blocks.filter((b) => stored.get(b.fromSeq)?.hash !== b.hash);
+  if (dry) {
+    out.missing = todo.length;
+    for (const b of blocks) {
+      const x = stored.get(b.fromSeq);
+      if (x && x.hash === b.hash) out.set(b.fromSeq, { text: x.text, toSeq: x.toSeq });
+    }
+    return out;
+  }
   let done = 0;
   for (const b of todo) {
     if (signal.aborted) break;
@@ -548,7 +567,7 @@ async function prepareSummaries(w: RpWorld, contextLimit: number | undefined, si
   patchGen({ status: undefined });
   for (const b of blocks) {
     const s = stored.get(b.fromSeq);
-    if (s && s.hash === b.hash) out.set(b.fromSeq, s.text);
+    if (s && s.hash === b.hash) out.set(b.fromSeq, { text: s.text, toSeq: s.toSeq });
   }
   return out;
 }
@@ -588,3 +607,102 @@ export async function summarizeNow(chatId: string, fromSeq: number): Promise<voi
 }
 
 export { messageText };
+
+/* ---------- Saran balasan ---------- */
+
+/** Ambil array string dari jawaban model (JSON, atau daftar bernomor kalau model tidak patuh). */
+export function parseSuggestions(text: string): string[] {
+  const t = text.replace(/```(?:json)?/gi, '').trim();
+  const a = t.indexOf('[');
+  const b = t.lastIndexOf(']');
+  if (a >= 0 && b > a) {
+    try {
+      const arr = JSON.parse(t.slice(a, b + 1));
+      if (Array.isArray(arr)) return arr.filter((x): x is string => typeof x === 'string' && !!x.trim()).map((x) => x.trim()).slice(0, 3);
+    } catch {
+      /* lanjut ke cara kedua */
+    }
+  }
+  return t
+    .split(/\n+/)
+    .map((l) => l.replace(/^\s*(?:\d+[.)]|[-*•])\s*/, '').replace(/^"|"$/g, '').trim())
+    .filter((l) => l.length > 3)
+    .slice(0, 3);
+}
+
+/** 3 pilihan giliran persona. Tidak disimpan ke riwayat; biaya dicatat di riwayat biaya chat. */
+export function suggestReplies(chatId: string, model: ModelRef): Promise<string[]> {
+  return exclusive(async () => {
+    const s = await getSettings();
+    const r = findModel(s.providers, model);
+    if (!r || !r.provider.apiKey.trim()) throw new UserError('nokey', 'Pilih model dan isi API key penyedianya dulu di Pengaturan → Penyedia AI.');
+    const w = await loadWorld(chatId);
+    if (!w) throw new Error('Chat tidak ditemukan.');
+    const signal = beginGen({ chatId, messageId: '', pageId: null, mode: 'impersonate', live: '', words: 0, thinking: false, kind: 'new', status: 'Menyiapkan saran…' });
+    let text = '';
+    let usage = { hit: 0, miss: 0, out: 0 };
+    try {
+      const summaries = await prepareSummaries(w, r.model.context, signal);
+      const built = buildRp(w, { mode: 'suggest', length: w.chat.rpLength ?? 'normal', summaries });
+      const res = await streamChat(
+        { provider: r.provider, model: r.model, messages: built.messages, thinking: false, temperature: temperatureFor(r.provider, r.model, w.character.creativity ?? s.creativity), maxTokens: 700 },
+        () => {},
+        signal,
+      );
+      text = res.content;
+      usage = res.usage;
+    } catch (e) {
+      const err = e as ApiError & { usage?: typeof usage };
+      if (err.usage) usage = err.usage;
+      await logUsage(chatId, 'rp-suggest', 'Saran balasan', r, usage);
+      throw e;
+    } finally {
+      endGen();
+    }
+    await logUsage(chatId, 'rp-suggest', 'Saran balasan', r, usage);
+    const nm = names(w);
+    const list = parseSuggestions(text).map((x) => guardReply(x, nm.user, nm.char).text).filter(Boolean);
+    if (!list.length) throw new Error('AI tidak memberi saran yang bisa dibaca. Coba lagi.');
+    return list;
+  });
+}
+
+/* ---------- Lihat yang dikirim ke AI ---------- */
+
+export interface RequestPreview {
+  parts: { key: string; label: string; text: string; tokens: number }[];
+  total: number;
+  /** perkiraan biaya (USD) dengan bagian awal kena cache; null kalau harga tidak diketahui */
+  costUsd: number | null;
+  model: string;
+  /** blok pesan lama yang akan diringkas dulu saat dikirim */
+  pendingSummaries: number;
+  lore: string[];
+}
+
+/** Pratinjau permintaan berikutnya tanpa mengirim apa pun. `text` kosong = "Lanjutkan". */
+export async function previewRequest(chatId: string, text: string, model: ModelRef | null): Promise<RequestPreview | null> {
+  const w = await loadWorld(chatId);
+  if (!w) return null;
+  const s = await getSettings();
+  const ref = await rpModel(chatId, model).catch(() => null);
+  const r = ref ? findModel(s.providers, ref) : null;
+  // Pesan yang akan dikirim ditambahkan sementara (tidak disimpan).
+  const seq = (w.messages[w.messages.length - 1]?.seq ?? Date.now()) + 1;
+  const fake = baseMsg({ chatId, seq, role: 'user', text: text.trim(), instr: text.trim() ? '' : CONTINUE_INSTR });
+  const world = { ...w, messages: [...w.messages, fake] };
+  const summaries = await prepareSummaries(world, r?.model.context, new AbortController().signal, true);
+  const length = w.chat.rpLength ?? 'normal';
+  const built = buildRp(world, { mode: 'reply', length, summaries });
+  const parts = built.parts.map((p) => ({ ...p, tokens: estimateTokens(p.text.length) }));
+  const total = parts.reduce((n, p) => n + p.tokens, 0);
+  // Bagian sesudah riwayat (tambahan akhir + pesan baru) dihitung tanpa cache; sisanya kena cache.
+  const tailKeys = new Set(['lore', 'memory', 'pinned', 'reminder', 'style', 'length']);
+  const miss = parts.filter((p) => tailKeys.has(p.key)).reduce((n, p) => n + p.tokens, 0) + estimateTokens(messageText(fake).length);
+  const out = Math.round(RP_LENGTH_TOKENS[length]);
+  const cost = r ? costUsd(r.provider, r.model, { hit: Math.max(0, total - miss), miss, out }, isPeak(), s.usdToIdr) : null;
+  return { parts, total, costUsd: cost, model: r?.model.label ?? '-', pendingSummaries: summaries.missing ?? 0, lore: built.lore };
+}
+
+/** perkiraan token keluaran per panjang balasan (kata maksimal × ±1,6) */
+const RP_LENGTH_TOKENS: Record<RpLength, number> = { short: 320, normal: 640, long: 1280 };
