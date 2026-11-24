@@ -57,6 +57,8 @@ export interface Chat {
   /** jumlah pesan saat memori terakhir diperbarui / tawarannya ditutup */
   memoryAtCount?: number;
   rpLength?: RpLength;
+  /** batas konteks roleplay (token) untuk ringkasan otomatis; 0 = ikuti batas model; kosong = bawaan 32 ribu */
+  rpContext?: number;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -122,6 +124,8 @@ export interface Message {
   greeting?: boolean;
   /** roleplay: judul entri lorebook yang dikirim saat balasan ini ditulis */
   lore?: string[];
+  /** roleplay: balasan dipotong karena AI mulai menulis giliran pihak lain */
+  guardCut?: boolean;
   createdAt: number;
 }
 
@@ -188,6 +192,9 @@ export interface Persona {
   deletedAt: number | null;
 }
 
+/** and_any: ada salah satu kata kunci kedua; and_all: semuanya; not_any: tidak ada satu pun; not_all: tidak semuanya. */
+export type LoreLogic = 'and_any' | 'and_all' | 'not_any' | 'not_all';
+
 export interface LoreEntry {
   id: string;
   title: string;
@@ -198,6 +205,10 @@ export interface LoreEntry {
   constant: boolean;
   /** makin besar makin didahulukan saat batas token tercapai */
   priority: number;
+  /** kata kunci kedua (kartu SillyTavern: secondary_keys) dan cara memakainya */
+  secondaryKeys?: string[];
+  logic?: LoreLogic;
+  caseSensitive?: boolean;
   extra?: Record<string, unknown>;
 }
 

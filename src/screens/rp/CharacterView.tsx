@@ -2,16 +2,17 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db, type Chat } from '../../db';
-import { IconBack, IconBook, IconChat, IconCopy, IconEdit, IconMore, IconPin, IconShare, IconTrash } from '../../components/Icons';
+import { IconBack, IconBook, IconChat, IconCopy, IconEdit, IconHistory, IconMore, IconPin, IconShare, IconTrash } from '../../components/Icons';
 import { Avatar } from '../../components/rp/Avatar';
 import { ConfirmSheet, PromptSheet, Sheet, SheetItem, toast, useLongPress } from '../../components/ui';
 import { goBack } from '../../lib/nav';
 import { fillMacros } from '../../lib/rp/cards';
-import { duplicateCharacter, duplicateRpChat, emptyPersona, ensureOwnLorebook, listPersonas, saveCharacter, savePersona, trashCharacter } from '../../lib/rp/data';
+import { duplicateCharacter, duplicateRpChat, emptyPersona, ensureOwnLorebook, listPersonas, resolvePersona, saveCharacter, savePersona, trashCharacter } from '../../lib/rp/data';
 import { startRpChat } from '../../lib/rp/engine';
 import { markChanged } from '../../lib/settings';
 import { trashChat } from '../../lib/pages';
-import { timeAgo } from '../../lib/util';
+import { formatRupiah, formatUsd, timeAgo } from '../../lib/util';
+import { useSettings } from '../../lib/settings';
 import { ExportSheet } from './RoleplayTab';
 
 export default function CharacterView() {
@@ -23,11 +24,15 @@ export default function CharacterView() {
     const out = [];
     for (const ch of list) {
       const last = await db.messages.where('[chatId+seq]').between([ch.id, -Infinity], [ch.id, Infinity]).last();
-      out.push({ chat: ch, last: last?.text ?? '' });
+      const p = await resolvePersona(ch.personaId);
+      const c0 = await db.characters.get(id);
+      out.push({ chat: ch, last: fillMacros(last?.text ?? '', c0?.name ?? '', p?.name || 'Pengguna') });
     }
     return out;
   }, [id]);
   const personas = useLiveQuery(listPersonas, []);
+  // Nama {{user}} di pilihan pembuka: persona yang diikat ke karakter (kalau masih ada), selain itu persona bawaan.
+  const startPersona = useLiveQuery(async () => (c ? resolvePersona(c.personaId) : null), [c?.personaId, personas]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickGreeting, setPickGreeting] = useState(false);
   const [askName, setAskName] = useState(false);
@@ -36,6 +41,7 @@ export default function CharacterView() {
   const [chatMenu, setChatMenu] = useState<Chat | null>(null);
   const [rename, setRename] = useState<Chat | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [costOpen, setCostOpen] = useState(false);
 
   if (c === undefined) return <div className="screen" />;
   if (!c || c.deletedAt) {
@@ -51,7 +57,7 @@ export default function CharacterView() {
     );
   }
   const greetings = [c.firstMes, ...c.altGreetings].filter((g) => g.trim());
-  const userName = personas?.find((p) => p.isDefault)?.name ?? 'Anda';
+  const userName = startPersona?.name ?? 'Anda';
 
   const begin = async (greeting?: number) => {
     try {
@@ -130,6 +136,7 @@ export default function CharacterView() {
         />
         <SheetItem icon={<IconPin />} label={c.pinned ? 'Lepas pin' : 'Pin di atas'} onClick={async () => { await saveCharacter({ ...c, pinned: !c.pinned }); setMenuOpen(false); }} />
         <SheetItem icon={<IconShare />} label="Ekspor kartu" onClick={() => { setMenuOpen(false); setExportOpen(true); }} />
+        <SheetItem icon={<IconHistory />} label="Riwayat biaya" hint="Semua chat dan bantuan AI untuk kartu ini" onClick={() => { setMenuOpen(false); setCostOpen(true); }} />
         <SheetItem
           icon={<IconCopy />}
           label="Duplikat"
@@ -179,6 +186,7 @@ export default function CharacterView() {
       />
 
       <ExportSheet c={exportOpen ? c : null} onClose={() => setExportOpen(false)} />
+      {costOpen && <CharacterCostSheet characterId={c.id} onClose={() => setCostOpen(false)} />}
       <ConfirmSheet
         open={confirmDel}
         title="Hapus karakter?"
@@ -251,5 +259,37 @@ function ChatRow({ chat, last, onOpen, onMenu }: { chat: Chat; last: string; onO
         <IconMore size={20} />
       </button>
     </li>
+  );
+}
+
+/** Biaya per chat (balasan + bantuan AI di chat itu) dan bantuan AI untuk kartu (buat, terjemahkan, ✦ per kolom). */
+function CharacterCostSheet({ characterId, onClose }: { characterId: string; onClose: () => void }) {
+  const settings = useSettings();
+  const rows = useLiveQuery(async () => {
+    const out: { id: string; label: string; cost: number; at: number }[] = [];
+    for (const u of await db.usage.where('rootId').equals(characterId).toArray()) if (u.costUsd > 0) out.push({ id: u.id, label: u.label, cost: u.costUsd, at: u.at });
+    for (const ch of await db.chats.where('characterId').equals(characterId).toArray()) {
+      const msgs = await db.messages.where('chatId').equals(ch.id).toArray();
+      const usage = await db.usage.where('rootId').equals(ch.id).toArray();
+      const cost = msgs.reduce((n, m) => n + m.costUsd, 0) + usage.reduce((n, u) => n + u.costUsd, 0);
+      if (cost > 0) out.push({ id: ch.id, label: `Chat: ${ch.title}${ch.deletedAt ? ' (di Sampah)' : ''}`, cost, at: ch.updatedAt });
+    }
+    return out.sort((a, b) => b.at - a.at);
+  }, [characterId]);
+  const rate = settings?.usdToIdr ?? 16500;
+  const total = (rows ?? []).reduce((n, r) => n + r.cost, 0);
+  return (
+    <Sheet open onClose={onClose} title="Riwayat biaya karakter">
+      <div className="cost-total">
+        Total: <b>{formatRupiah(total * rate)}</b> <small>({formatUsd(total)})</small>
+      </div>
+      {rows?.length === 0 && <p className="note">Belum ada pemakaian AI.</p>}
+      {rows?.map((r) => (
+        <div key={r.id} className="cost-row">
+          <span className="cost-label">{r.label}</span>
+          <span className="cost-val">{formatRupiah(r.cost * rate)}</span>
+        </div>
+      ))}
+    </Sheet>
   );
 }

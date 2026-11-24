@@ -5,8 +5,8 @@ import { db, type Character } from '../../db';
 import { IconBook, IconChevron, IconCopy, IconEdit, IconImport, IconMore, IconPen, IconPin, IconPlus, IconSearch, IconShare, IconSparkle, IconTrash, IconUser } from '../../components/Icons';
 import { Avatar } from '../../components/rp/Avatar';
 import { ConfirmSheet, Sheet, SheetItem, toast, useLongPress } from '../../components/ui';
-import { cardFileName, cardJsonBlob, cardPngBlob, makeAvatar, readCardFile } from '../../lib/rp/cards';
-import { duplicateCharacter, importCard, ownLorebook, saveCharacter, trashCharacter } from '../../lib/rp/data';
+import { cardFileName, cardJsonBlob, cardPngBlob, fillMacros, makeAvatar, readCardFile } from '../../lib/rp/cards';
+import { duplicateCharacter, importCard, ownLorebook, resolvePersona, saveCharacter, trashCharacter } from '../../lib/rp/data';
 import { downloadFile, shareFile, timeAgo } from '../../lib/util';
 
 function snippet(t: string): string {
@@ -36,7 +36,8 @@ export default function RoleplayTab() {
       const ch = c.characterId ? await db.characters.get(c.characterId) : undefined;
       if (!ch || ch.deletedAt) continue;
       const last = await db.messages.where('[chatId+seq]').between([c.id, -Infinity], [c.id, Infinity]).last();
-      out.push({ chat: c, character: ch, last: last?.text ?? '' });
+      const p = await resolvePersona(c.personaId);
+      out.push({ chat: c, character: ch, last: fillMacros(last?.text ?? '', ch.name, p?.name || 'Pengguna') });
     }
     return out;
   }, []);

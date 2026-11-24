@@ -1,5 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db, type Message, type RpLength } from '../../db';
 import { MarkdownView } from '../../components/Blocks';
@@ -35,8 +35,8 @@ import { isPeak } from '../../lib/pricing';
 import { estimateTokens, findModel, usableModels, type ModelRef } from '../../lib/providers';
 import { polishTurn } from '../../lib/rp/assist';
 import { fillMacros } from '../../lib/rp/cards';
-import { blockHash, historyOf, messageText, RP_KEEP_FULL, summaryBlocks } from '../../lib/rp/context';
-import { ensureOwnLorebook, listPersonas } from '../../lib/rp/data';
+import { blockHash, historyOf, messageText, RP_CONTEXT_OPTIONS, RP_DEFAULT_CONTEXT, RP_KEEP_FULL, rpAutoThreshold, summaryBlocks } from '../../lib/rp/context';
+import { ensureOwnLorebook, listPersonas, resolvePersona } from '../../lib/rp/data';
 import {
   continueRp,
   deleteRpMessages,
@@ -56,6 +56,9 @@ import { markChanged, useSettings } from '../../lib/settings';
 import { copyText, debounce, formatNumber, formatRupiah, formatUsd } from '../../lib/util';
 
 type Menu = Message | null;
+type TurnAction = 'menu' | 'copy' | 'retry' | 'resume' | 'version';
+/** jumlah pesan terakhir yang digambar; pesan lebih lama dimuat lewat tombol */
+const WINDOW = 120;
 
 export default function RpChat() {
   const { id = '' } = useParams();
@@ -63,9 +66,10 @@ export default function RpChat() {
   const settings = useSettings();
   const chat = useLiveQuery(async () => (await db.chats.get(id)) ?? null, [id]);
   const character = useLiveQuery(async () => (chat?.characterId ? ((await db.characters.get(chat.characterId)) ?? null) : null), [chat?.characterId]);
-  const persona = useLiveQuery(async () => (chat?.personaId ? ((await db.personas.get(chat.personaId)) ?? null) : null), [chat?.personaId]);
-  const messages = useLiveQuery(() => db.messages.where('chatId').equals(id).sortBy('seq'), [id]);
+  // Persona yang sudah dihapus tidak dipakai lagi (jatuh ke persona bawaan); ikut diperbarui saat daftar persona berubah.
   const personas = useLiveQuery(listPersonas, []);
+  const persona = useLiveQuery(async () => (chat ? resolvePersona(chat.personaId) : null), [chat?.personaId, personas]);
+  const messages = useLiveQuery(() => db.messages.where('chatId').equals(id).sortBy('seq'), [id]);
   const gen = useActiveGen();
 
   const [text, setText] = useState('');
@@ -92,6 +96,11 @@ export default function RpChat() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
   const loadedDraft = useRef(false);
+  const [windowSize, setWindowSize] = useState(WINDOW);
+  const [dismissedCtx, setDismissedCtx] = useState(false);
+  /** Aksi pesan lewat satu fungsi tetap, supaya baris pesan yang tidak berubah tidak digambar ulang. */
+  const actionsRef = useRef<(kind: TurnAction, m: Message, arg?: number) => void>(() => {});
+  const onAction = useCallback((kind: TurnAction, m: Message, arg?: number) => actionsRef.current(kind, m, arg), []);
 
   useEffect(() => {
     if (chat && !loadedDraft.current) {
@@ -214,6 +223,18 @@ export default function RpChat() {
   };
 
   const copy = async (t: string) => toast((await copyText(t)) ? 'Disalin' : 'Gagal menyalin');
+  const hidden = Math.max(0, list.length - windowSize);
+  actionsRef.current = (kind, m, arg) => {
+    if (kind === 'menu') setMenu(m);
+    else if (kind === 'copy') void copy(fill(m.text));
+    else if (kind === 'version') void selectRpVersion(m.id, arg ?? 0);
+    else if (kind === 'retry' || kind === 'resume') {
+      const md = needModel();
+      if (!md) return;
+      if (kind === 'retry') void retryRp(m.id, md, effThinking).catch(handleError);
+      else void continueRp(m.id, md).catch(handleError);
+    }
+  };
 
   /* ---------- Catatan di atas kolom ketik (maks. satu) ---------- */
   const sinceMemory = list.length - (chat.memoryAtCount ?? 0);
@@ -227,12 +248,24 @@ export default function RpChat() {
         </button>
       </div>
     );
-  } else if (ctxLimit > 0 && ctxTokens > ctxLimit * 0.85 && (chat.summaryMode ?? 'auto') === 'off') {
+  } else if (ctxLimit > 0 && ctxTokens > ctxLimit * 0.85) {
     note = (
       <div className="composer-note warn">
-        <span className="note-body">Chat ini mendekati batas konteks {resolved?.model.label}. Nyalakan ringkasan pesan lama.</span>
+        <span className="note-body">Chat ini mendekati batas konteks {resolved?.model.label}. Nyalakan ringkasan atau pilih model berkonteks lebih besar.</span>
         <button className="link-btn" onClick={() => setSummaryOpen(true)}>
           Atur
+        </button>
+      </div>
+    );
+  } else if ((chat.summaryMode ?? 'auto') === 'off' && ctxTokens > rpAutoThreshold(chat, ctxLimit) && !dismissedCtx) {
+    note = (
+      <div className="composer-note">
+        <span className="note-body">Chat ini sudah ±{formatNumber(Math.round(ctxTokens / 1000))} ribu token. Nyalakan ringkasan pesan lama supaya lebih hemat.</span>
+        <button className="link-btn" onClick={() => setSummaryOpen(true)}>
+          Atur
+        </button>
+        <button className="note-x" aria-label="Tutup" onClick={() => setDismissedCtx(true)}>
+          <IconClose size={14} />
         </button>
       </div>
     );
@@ -288,10 +321,26 @@ export default function RpChat() {
             <p>Kartu {character.name} belum punya pesan pembuka. Tulis giliran pertama Anda.</p>
           </div>
         )}
-        {list.map((m) => {
+        {hidden > 0 && (
+          <button
+            className="btn btn-small rp-older"
+            onClick={() => {
+              // Pertahankan posisi baca saat pesan lama ditambahkan di atas.
+              const el = listRef.current;
+              const h = el?.scrollHeight ?? 0;
+              setWindowSize((n) => n + WINDOW);
+              requestAnimationFrame(() => {
+                if (el) el.scrollTop += el.scrollHeight - h;
+              });
+            }}
+          >
+            Tampilkan {Math.min(WINDOW, hidden)} pesan sebelumnya ({hidden} tersembunyi)
+          </button>
+        )}
+        {list.slice(hidden).map((m) => {
           if (m.role === 'user') {
             if (!m.text.trim()) return <div key={m.id} className="rp-continue-mark">⋯ lanjutkan</div>;
-            return <UserTurn key={m.id} m={m} name={userName} avatar={persona?.avatar} onMenu={() => setMenu(m)} />;
+            return <UserTurn key={m.id} m={m} name={userName} avatar={persona?.avatar} onAction={onAction} />;
           }
           const streaming = genHere && gen!.mode === 'roleplay' && gen!.messageId === m.id;
           const isLast = m.id === lastAsst?.id;
@@ -305,44 +354,10 @@ export default function RpChat() {
               streaming={streaming}
               status={streaming ? (gen!.status ?? (gen!.thinking && !gen!.live ? 'Sedang berpikir…' : null)) : null}
               canSwipe={!busy && m.versions.length > 1 && (m.greeting ? greetingOnly : isLast)}
-              onVersion={(i) => void selectRpVersion(m.id, i)}
-              onMenu={() => setMenu(m)}
+              showActions={isLast && !streaming && !m.greeting}
+              busy={busy}
               rate={settings.usdToIdr}
-              actions={
-                isLast && !streaming && !m.greeting ? (
-                  <div className="action-row">
-                    <button className="act-btn" aria-label="Salin" onClick={() => void copy(fill(m.text))}>
-                      <IconCopy size={17} />
-                    </button>
-                    <button
-                      className="act-btn"
-                      aria-label="Coba lagi"
-                      disabled={busy}
-                      onClick={() => {
-                        const md = needModel();
-                        if (md) void retryRp(m.id, md, effThinking).catch(handleError);
-                      }}
-                    >
-                      <IconRetry size={17} />
-                    </button>
-                    {(m.status === 'stopped' || m.status === 'interrupted') && m.text.trim() && (
-                      <button
-                        className="act-text"
-                        disabled={busy}
-                        onClick={() => {
-                          const md = needModel();
-                          if (md) void continueRp(m.id, md).catch(handleError);
-                        }}
-                      >
-                        Lanjutkan
-                      </button>
-                    )}
-                    <button className="act-btn" aria-label="Aksi lain" onClick={() => setMenu(m)}>
-                      <IconMore size={17} />
-                    </button>
-                  </div>
-                ) : null
-              }
+              onAction={onAction}
             />
           );
         })}
@@ -586,7 +601,7 @@ export default function RpChat() {
           <SheetItem
             key={p.id}
             icon={<Avatar blob={p.avatar} name={p.name} size={28} />}
-            label={p.name + (p.id === chat.personaId ? ' ✓' : '')}
+            label={p.name + (p.id === persona?.id ? ' ✓' : '')}
             hint={p.description.slice(0, 70) || (p.isDefault ? 'Persona bawaan' : '')}
             onClick={async () => {
               await db.chats.update(id, { personaId: p.id });
@@ -625,7 +640,18 @@ export default function RpChat() {
       />
 
       {memoryOpen && <MemorySheet chatId={id} initial={chat.memory ?? ''} propose={memoryOpen.propose} onClose={() => setMemoryOpen(null)} />}
-      {summaryOpen && <RpSummariesSheet chatId={id} messages={list} mode={chat.summaryMode ?? 'auto'} onClose={() => setSummaryOpen(false)} fill={fill} />}
+      {summaryOpen && (
+        <RpSummariesSheet
+          chatId={id}
+          messages={list}
+          mode={chat.summaryMode ?? 'auto'}
+          budget={chat.rpContext ?? RP_DEFAULT_CONTEXT}
+          ctxTokens={ctxTokens}
+          modelLimit={ctxLimit}
+          onClose={() => setSummaryOpen(false)}
+          fill={fill}
+        />
+      )}
       {costOpen && <RpCostSheet chatId={id} messages={list} rate={settings.usdToIdr} onClose={() => setCostOpen(false)} />}
 
       <Sheet open={!!info} onClose={() => setInfo(null)} title="Info balasan">
@@ -645,6 +671,7 @@ export default function RpChat() {
             )}
             <p>Versi: {info.versions.length ? `${info.active + 1}/${info.versions.length}` : '-'}</p>
             <p>Lorebook aktif: {info.lore?.length ? info.lore.join(', ') : 'tidak ada'}</p>
+            {info.guardCut && <p>Dipotong otomatis: AI mulai menulis giliran {userName}.</p>}
           </div>
         )}
       </Sheet>
@@ -669,115 +696,160 @@ function summaryHint(mode: string | undefined): string {
 
 /* ---------- Pesan ---------- */
 
-function UserTurn({ m, name, avatar, onMenu }: { m: Message; name: string; avatar: Blob | null | undefined; onMenu: () => void }) {
-  const lp = useLongPress(onMenu);
-  return (
-    <div className="msg user rp-turn">
-      <div className="rp-turn-row">
-        <div className="bubble pressable rp-user-bubble" {...lp}>
-          <MarkdownView text={m.text} />
+const UserTurn = memo(
+  function UserTurn({ m, name, avatar, onAction }: { m: Message; name: string; avatar: Blob | null | undefined; onAction: (k: TurnAction, m: Message) => void }) {
+    const lp = useLongPress(() => onAction('menu', m));
+    return (
+      <div className="msg user rp-turn">
+        <div className="rp-turn-row">
+          <div className="bubble pressable rp-user-bubble" {...lp}>
+            <Md text={m.text} />
+          </div>
+          <Avatar blob={avatar} name={name} size={28} />
         </div>
-        <Avatar blob={avatar} name={name} size={28} />
       </div>
-    </div>
-  );
-}
+    );
+  },
+  (a, b) => a.m.id === b.m.id && a.m.text === b.m.text && a.name === b.name && a.avatar === b.avatar,
+);
 
-function AiTurn({
-  m,
-  name,
-  avatar,
-  text,
-  streaming,
-  status,
-  canSwipe,
-  onVersion,
-  onMenu,
-  rate,
-  actions,
-}: {
-  m: Message;
-  name: string;
-  avatar: Blob | null;
-  text: string;
-  streaming: boolean;
-  status: string | null;
-  canSwipe: boolean;
-  onVersion: (i: number) => void;
-  onMenu: () => void;
-  rate: number;
-  actions: ReactNode;
-}) {
-  const lp = useLongPress(onMenu);
-  const touch = useRef<{ x: number; y: number } | null>(null);
-  const n = m.versions.length;
-  const go = (d: 1 | -1) => {
-    const i = m.active + d;
-    if (i >= 0 && i < n) onVersion(i);
-  };
-  const meta = [
-    m.status === 'stopped' ? 'dihentikan' : '',
-    m.status === 'interrupted' ? 'terputus' : '',
-    !m.greeting && m.costUsd > 0 ? formatRupiah(m.costUsd * rate) + (m.costUnknown ? '+' : '') : '',
-    m.lore?.length ? `📖 ${m.lore.length}` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  return (
-    <div className="msg ai rp-turn">
-      <div className="rp-turn-head">
-        <Avatar blob={avatar} name={name} size={28} />
-        <span>{name}</span>
-        {m.greeting && <small>pembuka</small>}
-      </div>
-      <div
-        className={'rp-ai-text pressable' + (streaming ? ' streaming' : '')}
-        {...lp}
-        onTouchStart={(e) => {
-          touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        }}
-        onTouchEnd={(e) => {
-          const s = touch.current;
-          touch.current = null;
-          if (!s || !canSwipe) return;
-          const dx = e.changedTouches[0].clientX - s.x;
-          const dy = e.changedTouches[0].clientY - s.y;
-          // Geser mendatar di balasan = ganti versi.
-          if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1);
-        }}
-      >
-        {text.trim() ? <MarkdownView text={text} /> : null}
-        {streaming && (
-          <span className="typing">
-            <span />
-            <span />
-            <span />
-            {status ? ` ${status}` : ''}
-          </span>
-        )}
-        {!streaming && !text.trim() && m.error && <div className="error-line">Gagal: {m.error}</div>}
-      </div>
-      {!streaming && text.trim() && m.error && m.status !== 'done' && <div className="soft-line">{m.error}</div>}
-      {(canSwipe || meta) && (
-        <div className="msg-meta">
-          {canSwipe && (
-            <span className="versions">
-              <button className="act-btn" aria-label="Versi sebelumnya" disabled={m.active === 0} onClick={() => go(-1)}>
-                ‹
-              </button>
-              {m.active + 1}/{n}
-              <button className="act-btn" aria-label="Versi berikutnya" disabled={m.active >= n - 1} onClick={() => go(1)}>
-                ›
-              </button>
+/** MarkdownView dengan hasil parse yang diingat. */
+const Md = memo(function Md({ text }: { text: string }) {
+  return <MarkdownView text={text} />;
+});
+
+const AiTurn = memo(
+  function AiTurn({
+    m,
+    name,
+    avatar,
+    text,
+    streaming,
+    status,
+    canSwipe,
+    showActions,
+    busy,
+    rate,
+    onAction,
+  }: {
+    m: Message;
+    name: string;
+    avatar: Blob | null;
+    text: string;
+    streaming: boolean;
+    status: string | null;
+    canSwipe: boolean;
+    showActions: boolean;
+    busy: boolean;
+    rate: number;
+    onAction: (k: TurnAction, m: Message, arg?: number) => void;
+  }) {
+    const lp = useLongPress(() => onAction('menu', m));
+    const touch = useRef<{ x: number; y: number } | null>(null);
+    const n = m.versions.length;
+    const go = (d: 1 | -1) => {
+      const i = m.active + d;
+      if (i >= 0 && i < n) onAction('version', m, i);
+    };
+    const meta = [
+      m.status === 'stopped' ? 'dihentikan' : '',
+      m.status === 'interrupted' ? 'terputus' : '',
+      !m.greeting && m.costUsd > 0 ? formatRupiah(m.costUsd * rate) + (m.costUnknown ? '+' : '') : '',
+      m.lore?.length ? `📖 ${m.lore.length}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    return (
+      <div className="msg ai rp-turn">
+        <div className="rp-turn-head">
+          <Avatar blob={avatar} name={name} size={28} />
+          <span>{name}</span>
+          {m.greeting && <small>pembuka</small>}
+        </div>
+        <div
+          className={'rp-ai-text pressable' + (streaming ? ' streaming' : '')}
+          {...lp}
+          onTouchStart={(e) => {
+            touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+          }}
+          onTouchEnd={(e) => {
+            const s = touch.current;
+            touch.current = null;
+            if (!s || !canSwipe) return;
+            const dx = e.changedTouches[0].clientX - s.x;
+            const dy = e.changedTouches[0].clientY - s.y;
+            // Geser mendatar di balasan = ganti versi.
+            if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1);
+          }}
+        >
+          {text.trim() ? <Md text={text} /> : null}
+          {streaming && (
+            <span className="typing">
+              <span />
+              <span />
+              <span />
+              {status ? ` ${status}` : ''}
             </span>
           )}
-          {meta && <span>{meta}</span>}
+          {!streaming && !text.trim() && m.error && <div className="error-line">Gagal: {m.error}</div>}
         </div>
-      )}
-      {actions}
-    </div>
-  );
-}
+        {!streaming && text.trim() && m.error && m.status !== 'done' && <div className="soft-line">{m.error}</div>}
+        {(canSwipe || meta) && (
+          <div className="msg-meta">
+            {canSwipe && (
+              <span className="versions">
+                <button className="act-btn" aria-label="Versi sebelumnya" disabled={m.active === 0} onClick={() => go(-1)}>
+                  ‹
+                </button>
+                {m.active + 1}/{n}
+                <button className="act-btn" aria-label="Versi berikutnya" disabled={m.active >= n - 1} onClick={() => go(1)}>
+                  ›
+                </button>
+              </span>
+            )}
+            {meta && <span>{meta}</span>}
+          </div>
+        )}
+        {showActions && (
+          <div className="action-row">
+            <button className="act-btn" aria-label="Salin" onClick={() => onAction('copy', m)}>
+              <IconCopy size={17} />
+            </button>
+            <button className="act-btn" aria-label="Coba lagi" disabled={busy} onClick={() => onAction('retry', m)}>
+              <IconRetry size={17} />
+            </button>
+            {(m.status === 'stopped' || m.status === 'interrupted') && m.text.trim() && (
+              <button className="act-text" disabled={busy} onClick={() => onAction('resume', m)}>
+                Sambung balasan
+              </button>
+            )}
+            <button className="act-btn" aria-label="Aksi lain" onClick={() => onAction('menu', m)}>
+              <IconMore size={17} />
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  },
+  (a, b) =>
+    a.m.id === b.m.id &&
+    a.m.text === b.m.text &&
+    a.m.active === b.m.active &&
+    a.m.versions.length === b.m.versions.length &&
+    a.m.status === b.m.status &&
+    a.m.error === b.m.error &&
+    a.m.costUsd === b.m.costUsd &&
+    (a.m.lore?.length ?? 0) === (b.m.lore?.length ?? 0) &&
+    a.name === b.name &&
+    a.avatar === b.avatar &&
+    a.text === b.text &&
+    a.streaming === b.streaming &&
+    a.status === b.status &&
+    a.canSwipe === b.canSwipe &&
+    a.showActions === b.showActions &&
+    a.busy === b.busy &&
+    a.rate === b.rate,
+);
 
 function MessageMenu({
   m,
@@ -918,11 +990,29 @@ function MemorySheet({ chatId, initial, propose, onClose }: { chatId: string; in
 
 /* ---------- Ringkasan pesan lama ---------- */
 
-function RpSummariesSheet({ chatId, messages, mode, onClose, fill }: { chatId: string; messages: Message[]; mode: 'auto' | 'always' | 'off'; onClose: () => void; fill: (t: string) => string }) {
+function RpSummariesSheet({
+  chatId,
+  messages,
+  mode,
+  budget,
+  ctxTokens,
+  modelLimit,
+  onClose,
+  fill,
+}: {
+  chatId: string;
+  messages: Message[];
+  mode: 'auto' | 'always' | 'off';
+  budget: number;
+  ctxTokens: number;
+  modelLimit: number;
+  onClose: () => void;
+  fill: (t: string) => string;
+}) {
   const stored = useLiveQuery(() => db.rpSummaries.where('chatId').equals(chatId).toArray(), [chatId]);
   const [busy, setBusy] = useState<number | null>(null);
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
-  const blocks = summaryBlocks(historyOf(messages));
+  const blocks = summaryBlocks(historyOf(messages), stored ?? []);
   const total = historyOf(messages).filter((m) => !m.greeting).length;
   return (
     <>
@@ -944,9 +1034,28 @@ function RpSummariesSheet({ chatId, messages, mode, onClose, fill }: { chatId: s
             </button>
           ))}
         </div>
+        {mode === 'auto' && (
+          <>
+            <p className="note pad">Batas konteks roleplay (chat ini ±{formatNumber(Math.round(ctxTokens / 1000))} ribu token):</p>
+            <div className="segmented sheet-seg">
+              {RP_CONTEXT_OPTIONS.map((v) => (
+                <button
+                  key={v}
+                  className={budget === v ? 'active' : ''}
+                  onClick={async () => {
+                    await db.chats.update(chatId, { rpContext: v });
+                    markChanged();
+                  }}
+                >
+                  {v ? `${v / 1000}rb` : 'Model'}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         <p className="note pad">
           {mode === 'auto'
-            ? 'Otomatis: dipakai kalau chat melewati 60% batas konteks model. Ringkasan dibuat saat dibutuhkan.'
+            ? `Otomatis: pesan lama diringkas kalau chat melewati ${budget ? `${formatNumber(budget / 1000)} ribu token` : `60% batas konteks model${modelLimit ? ` (±${formatNumber(Math.round((modelLimit * 0.6) / 1000))} ribu)` : ''}`}. Lebih kecil = lebih hemat dan AI lebih fokus pada kartu; lebih besar = AI membaca lebih banyak detail.`
             : mode === 'always'
               ? 'Selalu: pesan lama selalu dikirim sebagai ringkasan (lebih hemat).'
               : 'Mati: semua pesan dikirim utuh.'}
@@ -961,7 +1070,7 @@ function RpSummariesSheet({ chatId, messages, mode, onClose, fill }: { chatId: s
             <div key={b.fromSeq} className="summary-row">
               <button className="summary-main" disabled={!s} onClick={() => s && setEdit({ id: s.id, text: s.text })}>
                 <b>
-                  Pesan {i * RP_KEEP_FULL + 1}–{(i + 1) * RP_KEEP_FULL}
+                  Bagian {i + 1} · {b.msgs.length} pesan
                 </b>
                 <small>
                   {status}

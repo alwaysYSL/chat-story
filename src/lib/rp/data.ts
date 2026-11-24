@@ -3,6 +3,7 @@ import { deleteChatPermanently, TRASH_DAYS } from '../pages';
 import { markChanged } from '../settings';
 import { uid } from '../util';
 import type { ImportedCard } from './cards';
+import { blockHash } from './context';
 
 /* ---------- Karakter ---------- */
 
@@ -138,6 +139,18 @@ export async function defaultPersona(): Promise<Persona | undefined> {
   return list.find((p) => p.isDefault) ?? list[0];
 }
 
+/**
+ * Persona yang dipakai: persona pilihan kalau masih ada (tidak di Sampah), selain itu persona bawaan.
+ * Dipakai di semua tempat supaya persona yang dihapus tidak pernah dipakai lagi.
+ */
+export async function resolvePersona(personaId: string | null | undefined): Promise<Persona | null> {
+  if (personaId) {
+    const p = await db.personas.get(personaId);
+    if (p && !p.deletedAt) return p;
+  }
+  return (await defaultPersona()) ?? null;
+}
+
 export async function savePersona(p: Persona): Promise<void> {
   await db.transaction('rw', db.personas, async () => {
     const others = (await db.personas.toArray()).filter((x) => x.id !== p.id && !x.deletedAt);
@@ -213,9 +226,14 @@ export async function duplicateRpChat(chatId: string): Promise<string | null> {
   const sums = await db.rpSummaries.where('chatId').equals(chatId).toArray();
   await db.transaction('rw', db.chats, db.messages, db.rpSummaries, async () => {
     await db.chats.add({ ...chat, id, title: `${chat.title} (salinan)`, titleAuto: false, createdAt: now, updatedAt: now, deletedAt: null });
-    await db.messages.bulkAdd(msgs.map((m) => ({ ...m, id: ids.get(m.id)!, chatId: id, status: m.status === 'streaming' ? 'done' : m.status })));
-    // Ringkasan memakai sidik id pesan, jadi dibuat ulang saat dibutuhkan; tidak disalin.
-    void sums;
+    const copies = msgs.map((m) => ({ ...m, id: ids.get(m.id)!, chatId: id, status: m.status === 'streaming' ? ('done' as const) : m.status }));
+    await db.messages.bulkAdd(copies);
+    // Ringkasan ikut disalin (sidiknya dihitung ulang dengan id pesan salinan), supaya tidak perlu diringkas ulang.
+    for (const s of sums) {
+      const inRange = (list: Message[]) => list.filter((m) => m.seq >= s.fromSeq && m.seq <= s.toSeq && m.status !== 'canceled' && (m.role === 'user' || m.text.trim()));
+      if (blockHash(inRange(msgs)) !== s.hash) continue; // sudah usang di chat asal
+      await db.rpSummaries.add({ ...s, id: uid(), chatId: id, hash: blockHash(inRange(copies)) });
+    }
   });
   markChanged();
   return id;

@@ -1,6 +1,6 @@
 import { db, type Chat, type Message, type RpLength, type UsageLog, type Version } from '../../db';
 import { ApiError, streamChat, type ApiMessage } from '../api';
-import { beginGen, currentGen, endGen, exclusive, patchGen, UserError } from '../generate';
+import { beginGen, currentGen, endGen, exclusive, patchGen, stopGeneration, UserError } from '../generate';
 import { costUsd, isPeak } from '../pricing';
 import { findModel, PROVIDER_INFO, usableModels, type ModelRef } from '../providers';
 import { getSettings, markChanged, temperatureFor, type Settings } from '../settings';
@@ -8,16 +8,18 @@ import { countWords, uid } from '../util';
 import {
   buildRp,
   estimateRp,
+  guardReply,
+  names,
   loadWorld,
   macro,
   messageText,
   historyOf,
-  RP_AUTO_RATIO,
+  rpAutoThreshold,
   summaryBlocks,
   transcript,
   type RpWorld,
 } from './context';
-import { defaultPersona } from './data';
+import { resolvePersona } from './data';
 import { CONTINUE_INSTR, rpMaxTokens, SYSTEM_RP_MEMORY, SYSTEM_RP_SUMMARY } from './prompts';
 
 export const RP_MAX_VERSIONS = 10;
@@ -47,9 +49,8 @@ export async function rpModel(chatId: string | null, pick?: ModelRef | null): Pr
 export async function startRpChat(characterId: string, opts: { personaId?: string | null; greeting?: number } = {}): Promise<string> {
   const c = await db.characters.get(characterId);
   if (!c) throw new Error('Karakter tidak ditemukan.');
-  const persona = opts.personaId
-    ? await db.personas.get(opts.personaId)
-    : (c.personaId ? await db.personas.get(c.personaId) : undefined) ?? (await defaultPersona());
+  // Persona yang diikat tapi sudah dihapus → persona bawaan.
+  const persona = await resolvePersona(opts.personaId ?? c.personaId);
   const now = Date.now();
   const count = (await db.chats.where('characterId').equals(characterId).toArray()).filter((x) => !x.deletedAt).length;
   const chat: Chat = {
@@ -60,7 +61,7 @@ export async function startRpChat(characterId: string, opts: { personaId?: strin
     pageId: null,
     draft: '',
     characterId,
-    personaId: persona && !persona.deletedAt ? persona.id : null,
+    personaId: persona?.id ?? null,
     memory: '',
     memoryAtCount: 0,
     rpLength: 'normal',
@@ -210,6 +211,8 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
   let status: Message['status'] = 'done';
   let error: string | null = null;
   let lore: string[] = [];
+  let guard = (t: string) => ({ text: t, cut: false });
+  let guardCut = false;
   const peak = isPeak();
   const usePrefix = kind === 'append' && !!resolved && PROVIDER_INFO[resolved.provider.kind].prefix;
   try {
@@ -217,6 +220,8 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
     const w = await loadWorld(chatId);
     if (!w) throw new ApiError('invalid', 'Chat atau karakter tidak ditemukan.');
     const length: RpLength = w.chat.rpLength ?? 'normal';
+    const nm = names(w);
+    guard = (t) => guardReply(t, nm.char, nm.user);
     const summaries = await prepareSummaries(w, resolved.model.context, signal);
     const built = buildRp(w, { beforeSeq: asst.seq, mode: 'reply', length, summaries });
     lore = built.lore;
@@ -240,15 +245,21 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
         prefix: usePrefix,
       },
       (d, k) => {
-        const g = currentGen();
-        if (!g) return;
+        const cur = currentGen();
+        if (!cur) return;
         if (k === 'reasoning') {
-          if (!g.thinking) patchGen({ thinking: true });
+          if (!cur.thinking) patchGen({ thinking: true });
           return;
         }
         raw += d;
-        const live = joinText(base, raw, usePrefix);
+        const g = guard(raw);
+        const live = joinText(base, g.text, usePrefix);
         patchGen({ live, words: countWords(live), thinking: false });
+        // AI mulai menulis giliran pengguna: hentikan permintaan (hemat token), simpan sampai sebelum baris itu.
+        if (g.cut && !guardCut) {
+          guardCut = true;
+          stopGeneration();
+        }
         if (Date.now() - lastSave > 2000) {
           lastSave = Date.now();
           void db.messages.update(asst.id, { text: live });
@@ -263,7 +274,7 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
     const err = e as ApiError & { partial?: string; usage?: typeof usage };
     if (err.partial !== undefined && err.partial.length >= raw.length) raw = err.partial;
     if (err.usage) usage = err.usage;
-    if (err instanceof ApiError && err.kind === 'aborted') status = 'stopped';
+    if (err instanceof ApiError && err.kind === 'aborted') status = guardCut ? 'done' : 'stopped';
     else if (err instanceof ApiError && (err.kind === 'interrupted' || err.kind === 'offline') && raw.trim()) {
       status = 'interrupted';
       error = err.message;
@@ -272,14 +283,17 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
       error = err instanceof ApiError ? err.message : 'Terjadi kesalahan tak terduga: ' + String(e);
     }
   }
+  const g = guard(cleanReply(raw));
+  if (g.cut) guardCut = true;
   const c = resolved ? costUsd(resolved.provider, resolved.model, usage, peak, s.usdToIdr) : 0;
   const cost = c ?? 0;
   const noUsage = usage.out === 0 && usage.miss === 0 && usage.hit === 0;
   const unknown = (c === null && !noUsage) || (noUsage && status !== 'done' && raw.trim().length > 0);
   try {
     const cur = (await db.messages.get(asst.id)) ?? asst;
-    const text = cleanReply(raw);
+    const text = g.text;
     const has = text.trim().length > 0;
+    if (!has && guardCut && status !== 'error') error = 'AI langsung menulis giliran Anda, jadi balasannya dibuang. Coba lagi.';
     if (status === 'error' && has) status = 'interrupted';
     const restored = prevStatus && prevStatus !== 'streaming' ? prevStatus : 'done';
     const patch: Partial<Message> = { costUsd: cur.costUsd + cost, ...(unknown ? { costUnknown: true } : {}) };
@@ -300,7 +314,7 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
     } else {
       let versions = [...(kind === 'retry' ? cur.versions : []), plainVersion(text, usage, cost)];
       if (versions.length > RP_MAX_VERSIONS) versions = versions.slice(-RP_MAX_VERSIONS);
-      Object.assign(patch, { text, versions, active: versions.length - 1, status, error: errOrNull(status, error), lore });
+      Object.assign(patch, { text, versions, active: versions.length - 1, status, error: errOrNull(status, error), lore, guardCut });
     }
     await db.messages.update(asst.id, patch);
     await db.chats.update(chatId, { updatedAt: Date.now() });
@@ -373,6 +387,8 @@ export function impersonate(chatId: string, hint: string, model: ModelRef, onLiv
     const signal = beginGen({ chatId, messageId: '', pageId: null, mode: 'impersonate', live: '', words: 0, thinking: false, kind: 'new' });
     let text = '';
     let usage = { hit: 0, miss: 0, out: 0 };
+    const nm = names(w);
+    let cut = false;
     try {
       const summaries = await prepareSummaries(w, r.model.context, signal);
       const built = buildRp(w, { mode: 'impersonate', hint, length: w.chat.rpLength ?? 'normal', summaries });
@@ -381,8 +397,14 @@ export function impersonate(chatId: string, hint: string, model: ModelRef, onLiv
         (d, k) => {
           if (k !== 'content') return;
           text += d;
-          onLive(text);
-          patchGen({ live: text, words: countWords(text) });
+          // Kebalikan balasan karakter: buang label nama persona, potong kalau mulai menulis giliran karakter.
+          const g = guardReply(text, nm.user, nm.char);
+          onLive(g.text);
+          patchGen({ live: g.text, words: countWords(g.text) });
+          if (g.cut && !cut) {
+            cut = true;
+            stopGeneration();
+          }
         },
         signal,
       );
@@ -399,7 +421,7 @@ export function impersonate(chatId: string, hint: string, model: ModelRef, onLiv
       endGen();
     }
     await logUsage(chatId, 'rp-persona', 'Bantu persona', r, usage);
-    return text.trim();
+    return guardReply(text, nm.user, nm.char).text.trim();
   });
 }
 
@@ -498,10 +520,13 @@ async function prepareSummaries(w: RpWorld, contextLimit: number | undefined, si
   const mode = w.chat.summaryMode ?? 'auto';
   const out = new Map<number, string>();
   if (mode === 'off') return out;
-  if (mode === 'auto' && !(contextLimit && estimateRp(w) > contextLimit * RP_AUTO_RATIO)) return out;
-  const blocks = summaryBlocks(historyOf(w.messages));
+  if (mode === 'auto' && !(estimateRp(w) > rpAutoThreshold(w.chat, contextLimit))) return out;
+  const rows = await db.rpSummaries.where('chatId').equals(w.chat.id).toArray();
+  const history = historyOf(w.messages);
+  const blocks = summaryBlocks(history, rows);
+  await dropOrphanSummaries(rows, history);
   if (!blocks.length) return out;
-  const stored = new Map((await db.rpSummaries.where('chatId').equals(w.chat.id).toArray()).map((s) => [s.fromSeq, s]));
+  const stored = new Map(rows.map((s) => [s.fromSeq, s]));
   const todo = blocks.filter((b) => stored.get(b.fromSeq)?.hash !== b.hash);
   let done = 0;
   for (const b of todo) {
@@ -542,11 +567,18 @@ async function summarizeBlock(w: RpWorld, msgs: Message[], locked: boolean, sign
   });
 }
 
+/** Ringkasan yang semua pesannya sudah dihapus tidak dipakai lagi: buang. */
+async function dropOrphanSummaries(rows: { id: string; fromSeq: number; toSeq: number }[], history: Message[]) {
+  const dead = rows.filter((r) => !history.some((m) => m.seq >= r.fromSeq && m.seq <= r.toSeq));
+  if (dead.length) await db.rpSummaries.bulkDelete(dead.map((r) => r.id));
+}
+
 /** Untuk sheet Ringkasan: buat/perbarui satu blok sekarang. */
 export async function summarizeNow(chatId: string, fromSeq: number): Promise<void> {
   const w = await loadWorld(chatId);
   if (!w) return;
-  const b = summaryBlocks(historyOf(w.messages)).find((x) => x.fromSeq === fromSeq);
+  const rows = await db.rpSummaries.where('chatId').equals(chatId).toArray();
+  const b = summaryBlocks(historyOf(w.messages), rows).find((x) => x.fromSeq === fromSeq);
   if (!b) return;
   const text = await summarizeBlock(w, b.msgs, false);
   if (!text) return;

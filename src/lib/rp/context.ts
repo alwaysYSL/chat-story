@@ -2,7 +2,8 @@ import { db, type Character, type Chat, type LoreEntry, type Lorebook, type Mess
 import type { ApiMessage } from '../api';
 import { mergeSameRole } from '../context';
 import { estimateTokens } from '../providers';
-import { fillMacros } from './cards';
+import { depthPrompt, fillMacros } from './cards';
+import { resolvePersona } from './data';
 import { CONTINUE_INSTR, impersonateInstr, lengthInstr, loreBlock, memoryBlock, reminderBlock, summaryBlock, SYSTEM_RP } from './prompts';
 
 /** Semua yang dibutuhkan untuk menyusun permintaan roleplay. */
@@ -19,7 +20,7 @@ export async function loadWorld(chatId: string): Promise<RpWorld | null> {
   if (!chat || chat.kind !== 'roleplay' || !chat.characterId) return null;
   const character = await db.characters.get(chat.characterId);
   if (!character) return null;
-  const persona = chat.personaId ? ((await db.personas.get(chat.personaId)) ?? null) : null;
+  const persona = await resolvePersona(chat.personaId);
   const own = (await db.lorebooks.where('characterId').equals(character.id).toArray()).filter((b) => !b.deletedAt);
   const worlds = (await db.lorebooks.bulkGet(character.worldIds)).filter((b): b is Lorebook => !!b && !b.deletedAt);
   const messages = await db.messages.where('chatId').equals(chatId).sortBy('seq');
@@ -72,19 +73,38 @@ export function systemText(w: RpWorld): string {
 
 /* ---------- Lorebook ---------- */
 
-function keyRegex(key: string): RegExp | null {
+function keyRegex(key: string, caseSensitive = false): RegExp | null {
   const k = key.trim();
   if (!k) return null;
   const m = k.match(/^\/(.+)\/([a-z]*)$/i);
   if (m) {
     try {
-      return new RegExp(m[1], m[2].includes('i') ? m[2] : m[2] + 'i');
+      return new RegExp(m[1], caseSensitive || m[2].includes('i') ? m[2] : m[2] + 'i');
     } catch {
       return null;
     }
   }
   const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?<![\\p{L}\\p{N}_])${esc}(?![\\p{L}\\p{N}_])`, 'iu');
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${esc}(?![\\p{L}\\p{N}_])`, caseSensitive ? 'u' : 'iu');
+}
+
+/** Kata kunci utama cocok, lalu syarat kata kunci kedua (kalau ada). */
+export function entryMatches(e: LoreEntry, scan: string): boolean {
+  const test = (k: string) => !!keyRegex(k, e.caseSensitive)?.test(scan);
+  if (!e.keys.some(test)) return false;
+  const sec = (e.secondaryKeys ?? []).filter((k) => k.trim());
+  if (!sec.length) return true;
+  const hits = sec.map(test);
+  switch (e.logic ?? 'and_any') {
+    case 'and_all':
+      return hits.every(Boolean);
+    case 'not_any':
+      return !hits.some(Boolean);
+    case 'not_all':
+      return !hits.every(Boolean);
+    default:
+      return hits.some(Boolean);
+  }
 }
 
 export interface LoreHits {
@@ -101,7 +121,7 @@ export function matchLore(books: Lorebook[], history: Message[], pending: string
     const scan = [...history.slice(-Math.max(1, b.scanDepth)).map(messageText), pending].map((t) => macro(w, t)).join('\n');
     const found = b.entries
       .filter((e) => e.enabled && !e.constant && e.content.trim())
-      .filter((e) => e.keys.some((k) => keyRegex(k)?.test(scan)))
+      .filter((e) => entryMatches(e, scan))
       .sort((a, c) => c.priority - a.priority);
     let used = 0;
     for (const e of found) {
@@ -122,6 +142,16 @@ export function matchLore(books: Lorebook[], history: Message[], pending: string
 export const RP_KEEP_FULL = 30;
 export const RP_BLOCK = 30;
 export const RP_AUTO_RATIO = 0.6;
+/** Batas konteks bawaan untuk roleplay. Model besar (±1 juta token) membuat ambang 60% praktis tidak pernah tercapai. */
+export const RP_DEFAULT_CONTEXT = 32_000;
+export const RP_CONTEXT_OPTIONS = [16_000, 32_000, 64_000, 128_000, 0];
+
+/** Ukuran konteks (token) yang memicu ringkasan Otomatis. */
+export function rpAutoThreshold(chat: Pick<Chat, 'rpContext'>, modelLimit: number | undefined): number {
+  const budget = chat.rpContext ?? RP_DEFAULT_CONTEXT;
+  const byModel = modelLimit ? modelLimit * RP_AUTO_RATIO : Infinity;
+  return budget > 0 ? Math.min(budget, byModel) : byModel;
+}
 
 export interface SummaryBlockRef {
   fromSeq: number;
@@ -141,14 +171,32 @@ export function blockHash(msgs: Message[]): string {
   return (h >>> 0).toString(36) + ':' + s.length;
 }
 
-/** Blok penuh yang boleh diringkas: pesan pembuka dan 30 pesan terakhir selalu utuh. */
-export function summaryBlocks(history: Message[]): SummaryBlockRef[] {
+/**
+ * Blok yang boleh diringkas: pesan pembuka dan 30 pesan terakhir selalu utuh.
+ * Batas blok mengikuti ringkasan yang sudah tersimpan (`anchors`), supaya menghapus satu pesan lama hanya
+ * membuat blok pesan itu usang, tidak menggeser semua blok sesudahnya. Pesan di luar blok tersimpan
+ * dikelompokkan per 30; sisa yang belum genap 30 dikirim utuh.
+ */
+export function summaryBlocks(history: Message[], anchors: { fromSeq: number; toSeq: number }[] = []): SummaryBlockRef[] {
   const body = history.filter((m) => !m.greeting);
-  const eligible = body.length - RP_KEEP_FULL;
+  const eligible = body.slice(0, Math.max(0, body.length - RP_KEEP_FULL));
+  const lastSeq = eligible.length ? eligible[eligible.length - 1].seq : -Infinity;
+  const ranges = [...anchors].sort((a, b) => a.fromSeq - b.fromSeq);
+  const rangeOf = (seq: number) => ranges.find((r) => seq >= r.fromSeq && seq <= r.toSeq);
   const out: SummaryBlockRef[] = [];
-  for (let i = 0; i + RP_BLOCK <= eligible; i += RP_BLOCK) {
-    const msgs = body.slice(i, i + RP_BLOCK);
-    out.push({ fromSeq: msgs[0].seq, toSeq: msgs[msgs.length - 1].seq, msgs, hash: blockHash(msgs) });
+  let i = 0;
+  while (i < eligible.length) {
+    const r = rangeOf(eligible[i].seq);
+    if (r) {
+      const msgs: Message[] = [];
+      while (i < eligible.length && eligible[i].seq <= r.toSeq) msgs.push(eligible[i++]);
+      // Blok tersimpan yang sebagian sudah masuk 30 pesan terakhir (karena ada pesan dihapus): kirim utuh.
+      if (r.toSeq <= lastSeq || msgs[msgs.length - 1]?.seq === r.toSeq) out.push({ fromSeq: r.fromSeq, toSeq: r.toSeq, msgs, hash: blockHash(msgs) });
+      continue;
+    }
+    const msgs: Message[] = [];
+    while (i < eligible.length && msgs.length < RP_BLOCK && !rangeOf(eligible[i].seq)) msgs.push(eligible[i++]);
+    if (msgs.length === RP_BLOCK) out.push({ fromSeq: msgs[0].seq, toSeq: msgs[msgs.length - 1].seq, msgs, hash: blockHash(msgs) });
   }
   return out;
 }
@@ -205,7 +253,8 @@ export function buildRp(w: RpWorld, o: BuildOptions): BuiltRp {
     extras.push(macro(w, impersonateInstr(o.hint ?? '')));
     out.push({ role: 'user', content: extras.join('\n\n') });
   } else {
-    const reminders = [w.character.postHistory.trim(), w.chat.reminder?.trim() ?? ''].filter(Boolean);
+    // depth_prompt dari kartu SillyTavern ikut di akhir (bukan di kedalaman tertentu), supaya riwayat tetap kena cache.
+    const reminders = [w.character.postHistory.trim(), depthPrompt(w.character).trim(), w.chat.reminder?.trim() ?? ''].filter(Boolean);
     if (reminders.length) extras.push(macro(w, reminderBlock(reminders.join('\n'))));
     extras.push(macro(w, lengthInstr(o.length)));
     const last = out[out.length - 1];
@@ -220,4 +269,25 @@ export function buildRp(w: RpWorld, o: BuildOptions): BuiltRp {
 export function estimateRp(w: RpWorld): number {
   const chars = systemText(w).length + historyOf(w.messages).reduce((n, m) => n + messageText(m).length, 0);
   return estimateTokens(chars);
+}
+
+/* ---------- Pengaman balasan ---------- */
+
+const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Rapikan balasan model:
+ * - buang label nama di awal ("Rika: …", "**Rika:** …");
+ * - potong mulai baris yang diawali nama pihak lain ("Dimas: …"), karena itu berarti model mulai menulis giliran
+ *   pihak lain. `cut` = true kalau ada yang dipotong.
+ */
+export function guardReply(text: string, self: string, other: string): { text: string; cut: boolean } {
+  const label = (name: string) => `(?:\\*\\*)?(?:${esc(name)})(?:\\*\\*)?\\s*:(?:\\*\\*)?`;
+  let t = text.replace(new RegExp(`^\\s*${label(self)}\\s*`, 'i'), '');
+  const m = t.match(new RegExp(`(^|\\n)[ \\t]*${label(other)}`, 'i'));
+  if (m && m.index !== undefined) {
+    t = t.slice(0, m.index).replace(/\s+$/, '');
+    return { text: t, cut: true };
+  }
+  return { text: t, cut: false };
 }
