@@ -1,4 +1,4 @@
-import { db, type Chat, type Message } from '../db';
+import { db, type Chat, type Message, type Page } from '../db';
 import type { ApiMessage, ContentPart } from './api';
 import { groupSegments, serializeBlocks, docBlocks } from './markdown';
 import { getStoryPages, displayTitle } from './pages';
@@ -74,12 +74,24 @@ export function findBrief(list: Message[]): Message | undefined {
  *
  * `beforeSeq`: hanya pesan dengan seq < beforeSeq yang dipakai.
  */
-export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = Infinity): Promise<BuiltContext> {
+export interface ContextOptions {
+  /** indeks page cerita yang dikirim sebagai ringkasan (bukan isi lengkap) */
+  summarized?: Set<number>;
+}
+
+function summaryBlock(page: Page, isOpening: boolean): string {
+  const name = isOpening ? 'pembukaan' : `bab "${displayTitle(page)}"`;
+  return `[Ringkasan ${name}. Isi lengkapnya tidak disertakan untuk menghemat konteks.]\n${page.summary!.text}`;
+}
+
+export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = Infinity, opts: ContextOptions = {}): Promise<BuiltContext> {
   const all = await db.messages.where('chatId').equals(chat.id).sortBy('seq');
   const msgs = all.filter((m) => m.seq < beforeSeq);
   const brief = findBrief(all);
   const pages = chat.pageId ? await getStoryPages(chat.pageId) : [];
   const pageIdx = new Map(pages.map((p, i) => [p.id, i]));
+  // Hanya page yang benar-benar punya ringkasan yang diganti.
+  const summarized = new Set([...(opts.summarized ?? [])].filter((i) => pages[i]?.summary?.text.trim()));
   const groups = pages.map((p) => groupSegments(p.doc));
   const segIndex = new Map<string, { page: number; first: number; text: string }>();
   groups.forEach((g, pi) => {
@@ -115,7 +127,7 @@ export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = 
     if (isBrief) {
       // Brief selalu di paling awal. Balasannya (pembukaan) diletakkan sesuai posisinya di naskah.
       const seg = a && a.status !== 'canceled' ? segIndex.get(a.id) : undefined;
-      const usable = seg && (!a!.targetPageId || pageIdx.has(a!.targetPageId));
+      const usable = seg && (!a!.targetPageId || pageIdx.has(a!.targetPageId)) && !summarized.has(seg.page);
       units.push({
         // Sebelum seluruh naskah; diskusi yang terjadi sebelum brief tetap di depannya.
         key: [-1, -1, u.seq],
@@ -167,13 +179,18 @@ export async function buildMainContext(chat: Chat, vision: boolean, beforeSeq = 
     units.push({ key: [pi, -2, -2], msgs: [{ role: 'user', content: chapterMarker(displayTitle(pages[pi])) }] });
   }
 
-  units.sort((x, y) => x.key[0] - y.key[0] || x.key[1] - y.key[1] || x.key[2] - y.key[2]);
-  const messages = mergeSameRole([{ role: 'system', content: SYSTEM_MAIN }, ...units.flatMap((u) => u.msgs)]);
+  // Bab yang diringkas: semua giliran di bab itu diganti satu ringkasan. Brief tetap dikirim.
+  const kept = units.filter((u) => u.key[0] < 0 || !summarized.has(u.key[0]) || (u.key[0] === -1 && u.key[1] === -1));
+  for (const pi of summarized) {
+    kept.push({ key: [pi, -3, -3], msgs: [{ role: 'user', content: summaryBlock(pages[pi], pi === 0) }] });
+  }
+  kept.sort((x, y) => x.key[0] - y.key[0] || x.key[1] - y.key[1] || x.key[2] - y.key[2]);
+  const messages = mergeSameRole([{ role: 'system', content: SYSTEM_MAIN }, ...kept.flatMap((u) => u.msgs)]);
   return { messages, imagesOmitted: omitted.n };
 }
 
 /** Konteks chat diskusi: brief + seluruh naskah di awal, lalu percakapan. */
-export async function buildDiscussContext(chat: Chat, vision: boolean, beforeSeq = Infinity): Promise<BuiltContext> {
+export async function buildDiscussContext(chat: Chat, vision: boolean, beforeSeq = Infinity, opts: ContextOptions = {}): Promise<BuiltContext> {
   const omitted = { n: 0 };
   const head: ApiMessage[] = [{ role: 'system', content: SYSTEM_DISCUSS }];
   if (chat.pageId) {
@@ -187,11 +204,13 @@ export async function buildDiscussContext(chat: Chat, vision: boolean, beforeSeq
     }
     const naskah = pages
       .map((p, i) => {
-        const body = serializeBlocks(docBlocks(p.doc));
+        const body =
+          opts.summarized?.has(i) && p.summary?.text.trim() ? summaryBlock(p, i === 0) : serializeBlocks(docBlocks(p.doc));
         return i === 0 ? `# ${displayTitle(p)}\n\n${body}` : `## ${displayTitle(p)}\n\n${body}`;
       })
       .join('\n\n');
-    const intro = `[Brief cerita dari penulis]\n\n${briefMsg ? [briefMsg.text, briefMsg.attachText].filter(Boolean).join('\n\n') : '(tidak ada brief)'}\n\n[Naskah cerita saat ini]\n\n${naskah}`;
+    const notes = main?.notes?.trim() ? `\n\n[Catatan cerita]\n${main.notes.trim()}` : '';
+    const intro = `[Brief cerita dari penulis]\n\n${briefMsg ? [briefMsg.text, briefMsg.attachText].filter(Boolean).join('\n\n') : '(tidak ada brief)'}${notes}\n\n[Naskah cerita saat ini]\n\n${naskah}`;
     if (briefMsg && briefMsg.attachmentIds.length) {
       const content = await messageContent({ ...briefMsg, text: intro, attachText: '', instr: '' }, vision, omitted);
       head.push({ role: 'user', content });
@@ -211,8 +230,19 @@ export async function buildDiscussContext(chat: Chat, vision: boolean, beforeSeq
   return { messages: mergeSameRole([...head, ...rest]), imagesOmitted: omitted.n };
 }
 
-export async function buildContext(chat: Chat, vision: boolean, beforeSeq = Infinity): Promise<BuiltContext> {
-  return chat.kind === 'discuss' ? buildDiscussContext(chat, vision, beforeSeq) : buildMainContext(chat, vision, beforeSeq);
+export async function buildContext(chat: Chat, vision: boolean, beforeSeq = Infinity, opts: ContextOptions = {}): Promise<BuiltContext> {
+  return chat.kind === 'discuss' ? buildDiscussContext(chat, vision, beforeSeq, opts) : buildMainContext(chat, vision, beforeSeq, opts);
+}
+
+/** Perkiraan ukuran konteks cerita (token) dari isi naskah dan pesan chat. */
+export function estimateContext(pages: Page[], messages: Message[]): number {
+  let chars = pages.reduce((n, p) => n + p.text.length, 0);
+  for (const m of messages) {
+    if (m.status === 'canceled' || m.excluded) continue;
+    if (m.role === 'user') chars += m.text.length + m.attachText.length + m.instr.length;
+    else if (m.mode !== 'write') chars += m.text.length;
+  }
+  return Math.round(chars / 3.5);
 }
 
 /** Brief chat utama (pesan tulis pertama). */

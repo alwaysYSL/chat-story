@@ -296,12 +296,12 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 | # | Fitur | Rilis |
 |---|---|---|
 | 1 | **TokenKoding sebagai penyedia bawaan** (harga Rupiah, minimal Rp10 per permintaan; penyedia TokenKoding yang dulu ditambahkan sendiri otomatis menjadi bawaan tanpa kehilangan API key dan riwayat). **Biaya minimum per permintaan** bisa diisi per model. **Ambil daftar model** dari endpoint `/models` penyedia (di APK berlaku untuk semua penyedia; di versi web hanya penyedia yang mengizinkan CORS). **Geser antar layar utama.** | 2.0.0 |
-| 2 | **Backup otomatis di APK:** backup mingguan ke `Documents/ChatStory` tanpa perlu menekan apa pun (kalau ada perubahan), beberapa file terakhir disimpan. | |
-| 3 | **Cari & ganti** di naskah yang dibuka, dengan pilihan ganti di seluruh cerita (semua bab), mis. untuk mengganti nama karakter. **Tandai paragraf sebagai milik saya**, untuk paragraf yang diketik sebelum versi 1.4. | |
-| 4 | **Catatan cerita** (*story bible*): fakta, karakter, dan status cerita yang selalu dikirim ke AI, disematkan seperti brief; AI bisa mengusulkan pembaruan setiap kali satu bab selesai. Rancangan detail dibahas sebelum dikerjakan. | |
-| 5 | **Ringkasan bab lama:** bab yang sudah selesai diganti ringkasannya (dibuat sekali per bab, disimpan supaya tetap kena cache); aktif kalau konteks mendekati batas model atau dinyalakan sendiri. Rancangan detail dibahas sebelum dikerjakan. | |
-| 6 | **Pilih teks → minta AI menulis ulang bagian itu.** Rancangan detail dibahas sebelum dikerjakan. | |
-| 7 | **Lampiran PDF:** teks diambil langsung di HP (gratis, semua penyedia). PDF hasil scan (berupa gambar) lewat OCR menyusul. | |
+| 2 | **Backup otomatis di APK:** backup mingguan ke `Documents/ChatStory/otomatis` saat aplikasi dibuka atau disembunyikan, hanya kalau ada perubahan; 4 file terakhir disimpan. Bisa dimatikan di Pengaturan → Data. | 2.1.0 |
+| 3 | **Cari & ganti** (ikon 🔍 di page): huruf besar/kecil, kata utuh, sebelumnya/berikutnya, ganti satu, ganti semua, dan pilihan **seluruh cerita** (semua bab; perubahan di bab lain tidak bisa di-undo, jadi dikonfirmasi dulu). **Tandai tulisan saya:** tombol 👤 di bar format muncul kalau kursor/pilihan berada di paragraf tulisan AI; paragraf itu tidak diganti lagi saat Coba lagi. Dibuat sebagai tombol, bukan tahan lama, karena tahan lama di editor Android dipakai untuk memilih teks. | 2.1.0 |
+| 4 | **Catatan cerita** (*story bible*): teks bebas per cerita, tampil di brief tersemat dan menu page. Dikirim di bagian akhir setiap permintaan menulis (dekat pengingat aturan), supaya mengubah catatan tidak mereset cache naskah. Saat bab sebelumnya selesai, kolom ketik menawarkan **Perbarui**: AI mengusulkan catatan baru dari bab itu, penulis memeriksa lalu Terima atau Batal. | 2.1.0 |
+| 5 | **Ringkasan bab lama:** mode Otomatis (bawaan; aktif kalau cerita melewati 60% batas konteks model), Selalu, atau Mati, per cerita. 2 page terakhir selalu dikirim utuh. Ringkasan dibuat sekali per bab dan disimpan (supaya tetap kena cache), dibuat ulang kalau bab diubah, dan bisa diedit. Menu page → Ringkasan bab lama. | 2.1.0 |
+| 6 | **Pilih teks → tulis ulang:** tombol ✦ di bar format saat ada teks terpilih. Pilihan Perhalus / Perpanjang / Persingkat atau arahan sendiri. AI membaca brief, catatan cerita, teks sebelum dan sesudahnya. Hasil ditampilkan dulu (Ganti / Coba lagi / Batal); setelah diganti bisa di-Undo. | 2.1.0 |
+| 7 | **Lampiran PDF:** teks diambil langsung di HP dengan pdf.js (gratis, semua penyedia, juga offline), dikirim seperti file teks. PDF hasil scan (berupa gambar) diberi pesan "tidak ada teks"; OCR menyusul. | 2.1.0 |
 
 **Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat.
 
@@ -323,6 +323,6 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 | Tulis ke page | Saklar di kolom input |
 | Chat per cerita | Satu chat utama + chat diskusi |
 | Coba lagi | Simpan maksimal 3 versi |
-| Lampiran | Gambar (baca saja) dan file teks |
+| Lampiran | Gambar (baca saja), file teks, dan PDF (teksnya) |
 | Pembuatan gambar | Tidak dibuat |
 | Penyedia AI | DeepSeek, Vikey, Poolside, OpenRouter bawaan, plus penyedia lain berformat OpenAI; model bisa diganti per pesan |

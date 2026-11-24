@@ -6,6 +6,7 @@ import { getSnapshotInfo, snapshotBlob, type SnapshotInfo } from '../lib/migrati
 import { goBack } from '../lib/nav';
 import { goTab, useTabSwipe } from '../components/TabSwipe';
 import { isNative } from '../lib/native';
+import { AUTO_KEEP } from '../lib/autobackup';
 import { backupFileName, createBackup, markBackedUp, restoreBackup } from '../lib/backup';
 import { ProviderList } from '../components/Providers';
 import { CREATIVITY_LABEL, updateSettings, useSettings, type Creativity, type Settings } from '../lib/settings';
@@ -274,6 +275,18 @@ export default function SettingsScreen() {
               }}
             />
           </div>
+          {isNative() && (
+            <div className="field-row">
+              <span>
+                Backup otomatis mingguan
+                <small>
+                  Ke Documents/ChatStory/otomatis kalau ada perubahan, {AUTO_KEEP} file terakhir disimpan. File tetap ada walaupun aplikasi
+                  di-uninstall, tapi ikut hilang kalau HP hilang. Terakhir: {s.lastAutoBackupAt ? timeAgo(s.lastAutoBackupAt) : 'belum pernah'}.
+                </small>
+              </span>
+              <Toggle checked={s.autoBackup} onChange={(v) => set({ autoBackup: v })} label="Backup otomatis mingguan" />
+            </div>
+          )}
           {storage && !storage.persisted && !isNative() && (
             <button
               className="btn"

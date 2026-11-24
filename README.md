@@ -10,7 +10,7 @@ PWA Android untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, Ope
 2. Ikuti panduan awal: pilih penyedia AI dan masukkan API key-nya, lalu pasang lewat menu titik tiga → **Tambahkan ke layar utama**.
 3. Ketuk **Ask AI**, tulis brief cerita, dan biarkan AI menulis pembukaan di page baru.
 
-Semua data (cerita, chat, gambar, API key) hanya tersimpan di HP. Backup rutin lewat **Pengaturan → Backup sekarang**.
+Semua data (cerita, chat, gambar, API key) hanya tersimpan di HP. Backup rutin lewat **Pengaturan → Backup sekarang**. Di APK, backup otomatis mingguan juga disimpan ke `Documents/ChatStory/otomatis`.
 
 ## Aplikasi Android (APK)
 
@@ -39,5 +39,9 @@ Setiap push ke `main` di-build dan di-deploy otomatis ke GitHub Pages lewat `.gi
 | `src/lib/generate.ts` | Mesin penulisan: kirim, coba lagi, versi, batalkan, lanjutkan |
 | `src/lib/markdown.ts` | Konversi teks model ↔ dokumen editor, segmen per balasan AI |
 | `src/lib/prompts.ts` | Instruksi sistem dan instruksi per permintaan |
+| `src/lib/assist.ts` | Permintaan AI di luar chat: catatan cerita, ringkasan bab, tulis ulang teks terpilih |
+| `src/lib/find.ts` | Cari & ganti di naskah (sorotan editor, ganti di bab lain) |
+| `src/lib/pdf.ts` | Ambil teks dari lampiran PDF (pdf.js) |
+| `src/lib/autobackup.ts` | Backup otomatis mingguan di APK |
 | `src/screens/` | Beranda, Chat, Page, Cari, Pengaturan, Sampah, Onboarding |
 | `src/components/` | Editor TipTap, sheet, ikon, menu page |

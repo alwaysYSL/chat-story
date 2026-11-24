@@ -28,3 +28,4 @@ export async function compressImage(file: File): Promise<{ blob: Blob; width: nu
 export const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 export const TEXT_EXT = /\.(txt|md|markdown)$/i;
 export const MAX_TEXT_BYTES = 500_000;
+export const MAX_PDF_BYTES = 30_000_000;

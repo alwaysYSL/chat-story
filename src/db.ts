@@ -22,6 +22,8 @@ export interface Page {
   updatedAt: number;
   openedAt: number;
   deletedAt: number | null;
+  /** Ringkasan bab (Versi 2). Dianggap usang kalau page diubah setelah `at`. */
+  summary?: { text: string; at: number };
 }
 
 export type ChatKind = 'free' | 'main' | 'discuss';
@@ -39,6 +41,13 @@ export interface Chat {
    * undefined = otomatis diambil dari bagian "aturan lanjutan" di brief; '' = dimatikan.
    */
   reminder?: string;
+  /** Catatan cerita (story bible), selalu dikirim ke AI di dekat akhir permintaan. */
+  notes?: string;
+  notesAt?: number;
+  /** page yang tawaran "perbarui catatan" sudah ditutup */
+  notesPromptFor?: string;
+  /** Ringkasan bab lama: otomatis (dekat batas konteks), selalu, atau mati. */
+  summaryMode?: 'auto' | 'always' | 'off';
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -112,6 +121,18 @@ export interface Attachment {
   createdAt: number;
 }
 
+/** Biaya permintaan AI di luar chat (catatan cerita, ringkasan bab, tulis ulang). */
+export interface UsageLog {
+  id: string;
+  rootId: string;
+  kind: 'notes' | 'summary' | 'rewrite';
+  label: string;
+  costUsd: number;
+  costUnknown: boolean;
+  model: string;
+  at: number;
+}
+
 export interface KV {
   key: string;
   value: unknown;
@@ -122,6 +143,7 @@ export const db = new Dexie('chat-story') as Dexie & {
   chats: EntityTable<Chat, 'id'>;
   messages: EntityTable<Message, 'id'>;
   attachments: EntityTable<Attachment, 'id'>;
+  usage: EntityTable<UsageLog, 'id'>;
   kv: EntityTable<KV, 'key'>;
 };
 
@@ -131,6 +153,10 @@ db.version(1).stores({
   messages: 'id, chatId, [chatId+seq], status',
   attachments: 'id',
   kv: 'key',
+});
+
+db.version(2).stores({
+  usage: 'id, rootId, at',
 });
 
 export const SCHEMA_VERSION = 1;

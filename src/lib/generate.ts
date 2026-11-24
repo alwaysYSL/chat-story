@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { db, type Attachment, type Chat, type ChatKind, type LengthPreset, type Message, type Version } from '../db';
-import { buildContext, getBrief, mergeSameRole, messageContent } from './context';
+import { buildContext, estimateContext, getBrief, mergeSameRole, messageContent } from './context';
+import { ensureSummaries, summarizedIndexes } from './assist';
 import { ApiError, streamChat, type ApiMessage } from './api';
 import { flushEditors } from './editors';
 import { isNative, nativeKeepAwake } from './native';
@@ -24,6 +25,7 @@ import {
   DISCUSS_INSTR,
   effectiveReminder,
   maxTokensFor,
+  notesBlock,
   openingInstr,
   reminderBlock,
 } from './prompts';
@@ -44,6 +46,8 @@ export interface ActiveGen {
   thinking: boolean;
   /** 'append' = teks baru menyambung segmen yang ada (Lanjutkan dari sini) */
   kind: 'new' | 'retry' | 'append';
+  /** keterangan langkah persiapan, mis. "Meringkas bab lama 1/2…" */
+  status?: string;
 }
 
 let active: ActiveGen | null = null;
@@ -75,7 +79,7 @@ export function isBusy() {
   return active !== null || starting;
 }
 
-async function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+export async function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   if (active || starting) throw new UserError('busy', 'AI masih menulis. Tunggu sampai selesai atau tekan Stop.');
   starting = true;
   try {
@@ -396,7 +400,8 @@ async function run({ chat, user, asst, settings: s, kind, prefixText, prevStatus
       throw new ApiError('auth', `API key ${resolved.provider.name} kosong. Isi di Pengaturan → Penyedia AI.`);
     }
     const vision = resolved.model.vision;
-    const ctx = await buildContext(chat, vision, user.seq);
+    const summarized = await prepareSummaries(chat, resolved.model.context);
+    const ctx = await buildContext(chat, vision, user.seq, { summarized });
     const omitted = { n: ctx.imagesOmitted };
     const extras = write ? await requestExtras(chat, user, asst, kind) : [];
     let current = await messageContent(user, vision, omitted);
@@ -475,6 +480,9 @@ async function requestExtras(chat: Chat, user: Message, asst: Message, kind: Run
   const out: string[] = [];
   const page = asst.targetPageId ? await db.pages.get(asst.targetPageId) : undefined;
   if (page?.parentId && !page.text.trim() && !/bab baru/i.test(user.instr)) out.push(chapterStartNote(page.title || 'Tanpa judul'));
+  // Catatan cerita: ditaruh di akhir (bukan di awal) supaya perubahan catatan tidak mereset cache seluruh cerita.
+  const main = chat.kind === 'main' ? ((await db.chats.get(chat.id)) ?? chat) : null;
+  if (main?.notes?.trim()) out.push(notesBlock(main.notes.trim()));
   if (user.length !== 'opening') {
     const fresh = (await db.chats.get(chat.id)) ?? chat;
     const brief = await getBrief(chat.id);
@@ -487,6 +495,29 @@ async function requestExtras(chat: Chat, user: Message, asst: Message, kind: Run
     if (after.trim()) out.push(afterTextBlock(after));
   }
   return out;
+}
+
+/**
+ * Ringkasan bab lama: tentukan bab mana yang dikirim sebagai ringkasan, dan buat ringkasan yang belum ada / usang.
+ * Kalau pembuatan ringkasan gagal, bab itu dikirim utuh seperti biasa.
+ */
+async function prepareSummaries(chat: Chat, contextLimit: number | undefined): Promise<Set<number>> {
+  if (!chat.pageId || chat.kind === 'free') return new Set();
+  const main = chat.kind === 'main' ? chat : await db.chats.where('pageId').equals(chat.pageId).filter((c) => c.kind === 'main' && !c.deletedAt).first();
+  const mode = main?.summaryMode ?? 'auto';
+  const pages = await getStoryPages(chat.pageId);
+  const msgs = await db.messages.where('chatId').equals(chat.id).toArray();
+  const idx = summarizedIndexes(pages, mode, contextLimit, estimateContext(pages, msgs));
+  if (!idx.length) return new Set();
+  try {
+    await ensureSummaries(chat.pageId, idx, (done, total) => {
+      if (active) setActive({ ...active, status: `Meringkas bab lama ${done + 1}/${total}…` });
+    }, controller?.signal);
+  } catch {
+    /* tetap kirim bab utuh */
+  }
+  if (active?.status) setActive({ ...active, status: undefined });
+  return new Set(idx);
 }
 
 /** Gabungkan teks yang sudah ada dengan sambungannya. Prefix completion menyambung persis dari karakter terakhir. */

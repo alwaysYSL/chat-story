@@ -26,6 +26,9 @@ export interface Settings {
   lastBackupAt: number;
   /** model bawaan yang dihapus pengguna (`provider::model`), supaya tidak muncul lagi saat update */
   removedPresets: string[];
+  /** APK: backup otomatis mingguan ke Documents/ChatStory/otomatis */
+  autoBackup: boolean;
+  lastAutoBackupAt: number;
 }
 
 const DEFAULT_SETTINGS: Omit<Settings, 'providers'> = {
@@ -48,6 +51,8 @@ const DEFAULT_SETTINGS: Omit<Settings, 'providers'> = {
   segMarker: false,
   lastBackupAt: 0,
   removedPresets: [],
+  autoBackup: true,
+  lastAutoBackupAt: 0,
 };
 
 /**

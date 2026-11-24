@@ -192,10 +192,11 @@ async function deleteChatHard(chatId: string): Promise<void> {
 }
 
 export async function deletePageHard(id: string): Promise<void> {
-  await db.transaction('rw', db.pages, db.chats, db.messages, db.attachments, async () => {
+  await db.transaction('rw', [db.pages, db.chats, db.messages, db.attachments, db.usage], async () => {
     const page = await db.pages.get(id);
     if (!page) return;
     if (!page.parentId) {
+      await db.usage.where('rootId').equals(id).delete();
       const chapters = await db.pages.where('parentId').equals(id).toArray();
       await db.pages.bulkDelete(chapters.map((c) => c.id));
       const chats = await db.chats.where('pageId').equals(id).toArray();

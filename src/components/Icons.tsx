@@ -210,3 +210,20 @@ export const IconFwd = (p: P) => (
     <path d="M5 12h14M13 6l6 6-6 6" />
   </Svg>
 );
+export const IconUser = (p: P) => (
+  <Svg {...p}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" />
+  </Svg>
+);
+export const IconNotes = (p: P) => (
+  <Svg {...p}>
+    <path d="M6 3h9l4 4v14H6z" />
+    <path d="M14 3v5h5M9 12h7M9 16h7" />
+  </Svg>
+);
+export const IconList = (p: P) => (
+  <Svg {...p}>
+    <path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" />
+  </Svg>
+);
