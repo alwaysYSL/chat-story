@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { goTab, type Tab } from './TabSwipe';
 import { IconChat, IconEdit, IconHome, IconSearch, IconSparkle } from './Icons';
 import { backStack, isNative } from '../lib/native';
 import { createStory } from '../lib/pages';
@@ -240,17 +241,21 @@ export function PromptSheet({
 /* ---------- Navigasi atas & bawah ---------- */
 
 export function TopTabs() {
+  const nav = useNavigate();
+  const loc = useLocation();
+  const cur: Tab = loc.pathname.startsWith('/chats') ? 'chats' : loc.pathname.startsWith('/settings') ? 'settings' : 'home';
+  const go = (to: Tab) => goTab(nav, loc, cur, to);
   return (
     <div className="top-tabs">
-      <NavLink to="/settings" className="avatar" aria-label="Pengaturan">
+      <button className={'avatar' + (cur === 'settings' ? ' active' : '')} aria-label="Pengaturan" onClick={() => go('settings')}>
         CS
-      </NavLink>
-      <NavLink to="/" end className={({ isActive }) => 'tab-pill' + (isActive ? ' active' : '')} aria-label="Beranda">
+      </button>
+      <button className={'tab-pill' + (cur === 'home' ? ' active' : '')} aria-label="Beranda" onClick={() => go('home')}>
         <IconHome size={20} />
-      </NavLink>
-      <NavLink to="/chats" className={({ isActive }) => 'tab-pill' + (isActive ? ' active' : '')} aria-label="Chat">
+      </button>
+      <button className={'tab-pill' + (cur === 'chats' ? ' active' : '')} aria-label="Chat" onClick={() => go('chats')}>
         <IconChat size={20} />
-      </NavLink>
+      </button>
     </div>
   );
 }

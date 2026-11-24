@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { testProvider } from '../lib/api';
+import { listModels, testProvider, type RemoteModel } from '../lib/api';
+import { isNative } from '../lib/native';
 import { formatPrice } from '../lib/pricing';
 import {
   defaultThinkingStyle,
@@ -18,7 +19,7 @@ import {
 import { db } from '../db';
 import { getSettings, updateSettings, useSettings, type Settings } from '../lib/settings';
 import { uid } from '../lib/util';
-import { IconCheck, IconChevron, IconPlus, IconSettings } from './Icons';
+import { IconCheck, IconChevron, IconDown, IconPlus, IconSettings } from './Icons';
 import { ConfirmSheet, Sheet, SheetItem, Toggle, toast } from './ui';
 
 /* ---------- Pilih model (di chat) ---------- */
@@ -254,6 +255,11 @@ function ModelEditor({
         <DecimalField label="Input" value={m.price.in} onChange={(n) => set({ price: { ...m.price, in: n } })} />
         <DecimalField label="Input dari cache" value={m.price.cache} onChange={(n) => set({ price: { ...m.price, cache: n } })} />
         <DecimalField label="Output" value={m.price.out} onChange={(n) => set({ price: { ...m.price, out: n } })} />
+        <DecimalField
+          label="Minimal per permintaan"
+          value={m.price.min ?? 0}
+          onChange={(n) => set({ price: { ...m.price, min: n || undefined } })}
+        />
         <p className="note">Kosongkan semua kalau harga tidak diketahui; biaya tidak ditampilkan untuk model ini.</p>
         <DecimalField label="Batas konteks (ribu token)" value={m.context ? m.context / 1000 : 0} onChange={(n) => set({ context: Math.round(n * 1000) })} />
         <p className="note">Lihat di dokumentasi penyedia, mis. 128 untuk 128K. Dipakai untuk peringatan saat cerita mendekati batas. Kosongkan kalau tidak tahu.</p>
@@ -295,6 +301,37 @@ function ProviderEditor({ initial, isNew, onClose }: { initial: ProviderConfig; 
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [editModel, setEditModel] = useState<{ index: number; model: ModelConfig } | null>(null);
+  const [remote, setRemote] = useState<RemoteModel[] | null>(null);
+  const [browsing, setBrowsing] = useState(false);
+  const browse = async () => {
+    setBrowsing(true);
+    try {
+      const list = await listModels({ ...p, baseUrl: p.baseUrl.trim(), apiKey: p.apiKey.trim() });
+      if (!list.length) toast(`${p.name} tidak mengirim model apa pun.`);
+      else setRemote(list);
+    } catch (e) {
+      toast('Gagal mengambil daftar model: ' + (e as Error).message);
+    } finally {
+      setBrowsing(false);
+    }
+  };
+  const addRemote = (r: RemoteModel) => {
+    if (p.models.some((m) => m.id === r.id)) {
+      setRemoved((x) => [...x, presetKey(p.id, r.id)]);
+      set({ models: p.models.filter((m) => m.id !== r.id) });
+      return;
+    }
+    const model: ModelConfig = markEdited(p.id, {
+      id: r.id,
+      label: r.label,
+      vision: r.vision,
+      thinking: defaultThinkingStyle(p.kind),
+      currency: r.priceUsd ? 'USD' : p.kind === 'vikey' || p.kind === 'tokenkoding' ? 'IDR' : 'USD',
+      price: r.priceUsd ?? { in: 0, cache: 0, out: 0 },
+      context: r.context,
+    });
+    set({ models: [...p.models, model] });
+  };
   const [confirmDel, setConfirmDel] = useState(false);
   const info = PROVIDER_INFO[p.kind];
   const set = (patch: Partial<ProviderConfig>) => setP((x) => ({ ...x, ...patch }));
@@ -354,6 +391,11 @@ function ProviderEditor({ initial, isNew, onClose }: { initial: ProviderConfig; 
       <Sheet open onClose={onClose} title={isNew ? 'Penyedia baru' : p.name}>
         <div className="form-pad">
           <p className="note">{info.note}</p>
+          {!info.web && !isNative() && (
+            <p className="note warn-text">
+              Di versi web, {p.name} akan ditolak browser (CORS). Pakai aplikasi Android (APK) untuk penyedia ini.
+            </p>
+          )}
           {p.kind === 'custom' && (
             <label className="field">
               <span>Nama</span>
@@ -418,6 +460,9 @@ function ProviderEditor({ initial, isNew, onClose }: { initial: ProviderConfig; 
               <IconChevron size={18} />
             </button>
           ))}
+          <button className="provider-row add" disabled={!p.apiKey.trim() || browsing} onClick={() => void browse()}>
+            <IconDown size={18} /> {browsing ? 'Mengambil daftar model…' : 'Ambil daftar model dari penyedia'}
+          </button>
           <button
             className="provider-row add"
             onClick={() =>
@@ -452,6 +497,9 @@ function ProviderEditor({ initial, isNew, onClose }: { initial: ProviderConfig; 
           </div>
         </div>
       </Sheet>
+      {remote && (
+        <ModelBrowser list={remote} chosen={new Set(p.models.map((m) => m.id))} onToggle={addRemote} onClose={() => setRemote(null)} />
+      )}
       {editModel && (
         <ModelEditor
           initial={editModel.model}
@@ -490,4 +538,61 @@ function ProviderEditor({ initial, isNew, onClose }: { initial: ProviderConfig; 
       />
     </>
   );
+}
+
+/* ---------- Pilih model dari daftar penyedia ---------- */
+
+const BROWSE_LIMIT = 150;
+
+function ModelBrowser({
+  list,
+  chosen,
+  onToggle,
+  onClose,
+}: {
+  list: RemoteModel[];
+  chosen: Set<string>;
+  onToggle: (m: RemoteModel) => void;
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState('');
+  const query = q.trim().toLowerCase();
+  const filtered = query ? list.filter((m) => m.id.toLowerCase().includes(query) || m.label.toLowerCase().includes(query)) : list;
+  return (
+    <Sheet open onClose={onClose} title={`Model dari penyedia (${list.length})`}>
+      <div className="form-pad">
+        <input className="input" placeholder="Cari model, mis. deepseek atau flash" value={q} onChange={(e) => setQ(e.target.value)} />
+        <p className="note">Ketuk untuk menambah atau melepas. Perubahan tersimpan saat Anda menekan Simpan di halaman penyedia.</p>
+      </div>
+      {filtered.slice(0, BROWSE_LIMIT).map((m) => (
+        <SheetItem
+          key={m.id}
+          icon={chosen.has(m.id) ? <IconCheck /> : <span />}
+          label={m.label}
+          hint={[
+            m.id !== m.label ? m.id : '',
+            m.vision ? 'bisa baca gambar' : '',
+            m.context ? `konteks ${kTok(m.context)}` : '',
+            m.priceUsd ? `$${round2(m.priceUsd.in)} / $${round2(m.priceUsd.out)} per 1 juta` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+          onClick={() => onToggle(m)}
+        />
+      ))}
+      {filtered.length > BROWSE_LIMIT && (
+        <p className="note pad">Menampilkan {BROWSE_LIMIT} dari {filtered.length}. Persempit dengan kolom cari.</p>
+      )}
+      {!filtered.length && <p className="note pad">Tidak ada model yang cocok.</p>}
+      <div className="row-buttons pad">
+        <button className="btn btn-primary" onClick={onClose}>
+          Selesai
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+function round2(n: number): string {
+  return n >= 1 ? n.toFixed(2).replace(/\.?0+$/, '') : n.toPrecision(2);
 }

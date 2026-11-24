@@ -23,6 +23,8 @@ export function costUsd(
   if (!hasPrice(model)) return null;
   const p = model.price;
   let cost = (usage.hit * p.cache + usage.miss * p.in + usage.out * p.out) / 1_000_000;
+  // Tagihan minimum per permintaan (hanya untuk permintaan yang benar-benar diproses penyedia).
+  if (p.min && usage.hit + usage.miss + usage.out > 0) cost = Math.max(cost, p.min);
   if (model.currency === 'IDR') cost = cost / usdToIdr;
   if (peak && PROVIDER_INFO[provider.kind].peak) cost *= 2;
   return cost;
@@ -31,5 +33,6 @@ export function costUsd(
 export function formatPrice(model: ModelConfig): string {
   if (!hasPrice(model)) return 'harga belum diisi';
   const f = (n: number) => (model.currency === 'IDR' ? 'Rp' + n.toLocaleString('id-ID') : '$' + n);
-  return `${f(model.price.in)} / ${f(model.price.cache)} / ${f(model.price.out)} per 1 juta token (input / cache / output)`;
+  const base = `${f(model.price.in)} / ${f(model.price.cache)} / ${f(model.price.out)} per 1 juta token (input / cache / output)`;
+  return model.price.min ? `${base}, minimal ${f(model.price.min)} per permintaan` : base;
 }

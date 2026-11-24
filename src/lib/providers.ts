@@ -3,7 +3,7 @@
  * dengan sedikit perbedaan (cara mematikan thinking, cek saldo, lanjutan prefix).
  */
 
-export type ProviderKind = 'deepseek' | 'vikey' | 'poolside' | 'openrouter' | 'custom';
+export type ProviderKind = 'deepseek' | 'vikey' | 'poolside' | 'openrouter' | 'tokenkoding' | 'custom';
 
 /** Cara menyalakan/mematikan mode berpikir untuk model ini. */
 export type ThinkingStyle = 'deepseek' | 'poolside' | 'openrouter' | 'none';
@@ -13,6 +13,8 @@ export interface ModelPrice {
   in: number;
   cache: number;
   out: number;
+  /** tagihan minimum per permintaan (mata uang model), mis. TokenKoding Rp10 */
+  min?: number;
 }
 
 export interface ModelConfig {
@@ -54,6 +56,8 @@ export interface ProviderInfo {
   prefix: boolean;
   /** harga 2× di jam peak (khusus DeepSeek) */
   peak: boolean;
+  /** penyedia mengizinkan aplikasi web (CORS); kalau false hanya bisa dipakai di APK */
+  web: boolean;
   note: string;
 }
 
@@ -63,6 +67,7 @@ export const PROVIDER_INFO: Record<ProviderKind, ProviderInfo> = {
     balance: true,
     prefix: true,
     peak: true,
+    web: true,
     note: 'Langsung dari DeepSeek. Cache paling murah, cocok untuk cerita panjang.',
   },
   vikey: {
@@ -70,6 +75,7 @@ export const PROVIDER_INFO: Record<ProviderKind, ProviderInfo> = {
     balance: false,
     prefix: false,
     peak: false,
+    web: true,
     note: 'Bayar pakai QRIS dalam Rupiah. Banyak model (DeepSeek, Claude, GPT, dan lainnya). Saldo dicek di dashboard Vikey.',
   },
   poolside: {
@@ -77,6 +83,7 @@ export const PROVIDER_INFO: Record<ProviderKind, ProviderInfo> = {
     balance: false,
     prefix: false,
     peak: false,
+    web: true,
     note: 'Model Laguna dari Poolside. Dirancang untuk coding, hanya teks (tidak bisa membaca gambar). Harga isi sendiri kalau ingin biaya tampil.',
   },
   openrouter: {
@@ -84,13 +91,23 @@ export const PROVIDER_INFO: Record<ProviderKind, ProviderInfo> = {
     balance: false,
     prefix: false,
     peak: false,
+    web: true,
     note: 'Ratusan model dari banyak penyedia, termasuk model gratis. Tambahkan model id dari openrouter.ai/models.',
+  },
+  tokenkoding: {
+    keyUrl: 'https://tokenkoding.id/dasbor/keys',
+    balance: false,
+    prefix: false,
+    peak: false,
+    web: false,
+    note: 'Bayar Rupiah lewat QRIS, banyak model open-weight. Tagihan minimal Rp10 per permintaan. Hanya bisa dipakai di aplikasi Android (APK), karena TokenKoding tidak mengizinkan aplikasi web.',
   },
   custom: {
     keyUrl: '',
     balance: false,
     prefix: false,
     peak: false,
+    web: true,
     note: 'Penyedia lain yang kompatibel dengan format OpenAI. Isi base URL (biasanya berakhiran /v1) dan model id.',
   },
 };
@@ -154,6 +171,20 @@ export function presetProviders(): ProviderConfig[] {
       ],
     },
     {
+      id: 'tokenkoding',
+      kind: 'tokenkoding',
+      name: 'TokenKoding',
+      baseUrl: 'https://api.tokenkoding.id/v1',
+      apiKey: '',
+      models: [
+        {
+          ...DS('deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', true, { in: 2000, cache: 54, out: 8000, min: 10 }),
+          currency: 'IDR',
+          context: 1_048_560,
+        },
+      ],
+    },
+    {
       id: 'openrouter',
       kind: 'openrouter',
       name: 'OpenRouter',
@@ -178,7 +209,7 @@ export function newCustomProvider(id: string): ProviderConfig {
 }
 
 export function defaultThinkingStyle(kind: ProviderKind): ThinkingStyle {
-  return kind === 'deepseek' || kind === 'vikey'
+  return kind === 'deepseek' || kind === 'vikey' || kind === 'tokenkoding'
     ? 'deepseek'
     : kind === 'poolside'
       ? 'poolside'
@@ -188,7 +219,7 @@ export function defaultThinkingStyle(kind: ProviderKind): ThinkingStyle {
 }
 
 export function hasPrice(m: ModelConfig): boolean {
-  return m.price.in > 0 || m.price.out > 0 || m.price.cache > 0;
+  return m.price.in > 0 || m.price.out > 0 || m.price.cache > 0 || (m.price.min ?? 0) > 0;
 }
 
 export function findModel(
@@ -241,26 +272,53 @@ function sameSettings(a: ModelConfig, b: ModelConfig): boolean {
 export function withPresetDefaults(providers: ProviderConfig[], removed: string[] = []): ProviderConfig[] {
   const removedSet = new Set(removed);
   const presets = presetProviders();
+  const used = new Set<string>();
   const out = providers.map((p) => {
-    const pre = presets.find((x) => x.id === p.id);
+    let pre = presets.find((x) => x.id === p.id);
+    // Penyedia yang dulu ditambahkan sendiri dengan alamat yang sama kini menjadi penyedia bawaan.
+    // Id-nya tetap (pesan lama merujuk id itu); jenis dan model bawaan diambil dari preset.
+    let adopted = false;
+    if (!pre && (p.kind === 'custom' || presets.some((x) => x.kind === p.kind))) {
+      pre = presets.find(
+        (x) =>
+          !providers.some((y) => y.id === x.id) &&
+          !used.has(x.id) &&
+          (p.kind === 'custom' || p.kind === x.kind) &&
+          hostOf(x.baseUrl) === hostOf(p.baseUrl),
+      );
+      adopted = !!pre;
+    }
     if (!pre) return p;
+    used.add(pre.id);
     const models = p.models.map((m) => {
-      const pm = pre.models.find((x) => x.id === m.id);
+      const pm = pre!.models.find((x) => x.id === m.id);
       if (!pm) return m;
-      // Data lama tanpa penanda: dianggap bawaan kalau harganya masih sama dengan harga bawaan.
-      const isPreset = m.preset ?? JSON.stringify(m.price) === JSON.stringify(pm.price);
-      if (!isPreset) return { ...m, preset: false, context: m.context ?? pm.context };
+      // Data lama tanpa penanda: dianggap bawaan kalau harganya masih sama dengan harga bawaan
+      // (atau belum diisi sama sekali, untuk penyedia yang dulu ditambahkan sendiri).
+      const unpriced = !hasPrice(m);
+      const isPreset = adopted ? unpriced || m.preset === true : (m.preset ?? JSON.stringify(m.price) === JSON.stringify(pm.price));
+      if (!isPreset) {
+        return { ...m, preset: false, context: m.context ?? pm.context, price: { ...m.price, min: m.price.min ?? pm.price.min } };
+      }
       return { ...m, ...Object.fromEntries(SYNC_FIELDS.map((k) => [k, pm[k]])), preset: true } as ModelConfig;
     });
     for (const pm of pre.models) {
       if (!models.some((m) => m.id === pm.id) && !removedSet.has(presetKey(p.id, pm.id))) models.push({ ...pm, preset: true });
     }
-    return { ...p, models };
+    return { ...p, kind: pre.kind, models };
   });
   for (const pre of presets) {
-    if (!out.some((p) => p.id === pre.id)) out.push({ ...pre, models: pre.models.map((m) => ({ ...m, preset: true })) });
+    if (!used.has(pre.id) && !out.some((p) => p.id === pre.id)) out.push({ ...pre, models: pre.models.map((m) => ({ ...m, preset: true })) });
   }
   return out;
+}
+
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
 }
 
 /** Tandai model sebagai diubah pengguna kalau pengaturannya berbeda dari bawaan. */

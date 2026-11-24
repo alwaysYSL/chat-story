@@ -9,8 +9,9 @@ import { updateSettings } from './settings';
  *
  * 1 = Versi 1 awal (satu API key DeepSeek)
  * 2 = daftar penyedia AI tersimpan, model bawaan ditandai
+ * 3 = Versi 2.0.0: TokenKoding bawaan (penyedia TokenKoding buatan sendiri diubah jadi bawaan), biaya minimum
  */
-export const DATA_VERSION = 2;
+export const DATA_VERSION = 3;
 
 const VERSION_KEY = 'dataVersion';
 const SNAPSHOT_KEY = 'snapshot:pre-update';
@@ -56,8 +57,8 @@ export function runMigrations(): Promise<void> {
     }
     if (v >= DATA_VERSION) return;
     await saveSnapshot(v);
-    if (v < 2) {
-      // Simpan pengaturan dalam format daftar penyedia (sekaligus menandai model bawaan).
+    if (v < 3) {
+      // Simpan pengaturan dalam format terbaru: daftar penyedia, model bawaan ditandai, penyedia bawaan baru.
       await updateSettings({});
     }
     await db.kv.put({ key: VERSION_KEY, value: DATA_VERSION });

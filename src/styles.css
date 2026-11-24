@@ -1879,3 +1879,37 @@ body:has(.chat-screen) .toast {
 .ProseMirror[contenteditable='false'] p[data-seg]:has(> br:only-child) {
   display: none;
 }
+
+/* ---------- Geser antar layar utama ---------- */
+.tab-screen {
+  touch-action: pan-y;
+  will-change: transform;
+}
+.tab-screen .scroll-area {
+  touch-action: pan-y;
+}
+.recents {
+  touch-action: pan-x pan-y;
+}
+.tab-enter-right {
+  animation: tab-in-right 0.22s ease-out;
+}
+.tab-enter-left {
+  animation: tab-in-left 0.22s ease-out;
+}
+@keyframes tab-in-right {
+  from {
+    transform: translateX(28%);
+    opacity: 0.4;
+  }
+}
+@keyframes tab-in-left {
+  from {
+    transform: translateX(-28%);
+    opacity: 0.4;
+  }
+}
+.avatar.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

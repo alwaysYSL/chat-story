@@ -5,6 +5,7 @@ import { db, type Chat } from '../db';
 import { IconEdit, IconMore, IconTrash } from '../components/Icons';
 import { BottomBar, PromptSheet, Sheet, SheetItem, TopTabs, toast, useLongPress } from '../components/ui';
 import { markChanged } from '../lib/settings';
+import { useTabSwipe } from '../components/TabSwipe';
 import { displayTitle, trashChat } from '../lib/pages';
 import { timeAgo } from '../lib/util';
 
@@ -16,6 +17,7 @@ const KIND_LABEL: Record<Chat['kind'], string> = {
 
 export default function Chats() {
   const nav = useNavigate();
+  const swipeRef = useTabSwipe('chats');
   const chats = useLiveQuery(() => db.chats.filter((c) => !c.deletedAt).toArray(), []);
   const pages = useLiveQuery(() => db.pages.filter((p) => !p.parentId).toArray(), []);
   const [menu, setMenuChat] = useState<Chat | null>(null);
@@ -48,7 +50,7 @@ export default function Chats() {
   };
 
   return (
-    <div className="screen">
+    <div className="screen tab-screen" ref={swipeRef}>
       <TopTabs />
       <div className="scroll-area">
         {chats && chats.length === 0 && (

@@ -368,3 +368,71 @@ export async function testProvider(provider: ProviderConfig, model?: ModelConfig
   }
   return { ok: true, text: `Terhubung ke ${name} dengan model ${m.label}. Cek saldo di situs ${name}.` };
 }
+
+/* ---------- Daftar model dari penyedia ---------- */
+
+export interface RemoteModel {
+  id: string;
+  label: string;
+  context?: number;
+  vision: boolean;
+  /** harga USD per 1 juta token kalau penyedia mencantumkannya (mis. OpenRouter) */
+  priceUsd?: { in: number; cache: number; out: number };
+}
+
+type Raw = Record<string, unknown>;
+const num = (v: unknown): number | undefined => {
+  const n = typeof v === 'string' ? parseFloat(v) : typeof v === 'number' ? v : NaN;
+  return Number.isFinite(n) ? n : undefined;
+};
+
+function parseRemote(m: Raw): RemoteModel | null {
+  const id = typeof m.id === 'string' ? m.id : null;
+  if (!id) return null;
+  const arch = (m.architecture ?? {}) as Raw;
+  const top = (m.top_provider ?? {}) as Raw;
+  const caps = m.capabilities;
+  const modalities = [
+    ...(Array.isArray(arch.input_modalities) ? arch.input_modalities : []),
+    ...(Array.isArray(m.input_modalities) ? m.input_modalities : []),
+    ...(Array.isArray(m.modalities) ? m.modalities : []),
+  ].map(String);
+  const vision =
+    m.supports_vision === true ||
+    modalities.includes('image') ||
+    (Array.isArray(caps) && caps.map(String).includes('vision')) ||
+    (!!caps && typeof caps === 'object' && (caps as Raw).vision === true);
+  const context = num(m.context_window) ?? num(m.context_length) ?? num(top.context_length) ?? num(m.max_context_length);
+  const label = [m.display_name, m.name].find((x) => typeof x === 'string' && x.trim()) as string | undefined;
+  let priceUsd: RemoteModel['priceUsd'];
+  const pr = (m.pricing ?? null) as Raw | null;
+  // Format OpenRouter: USD per token dalam string.
+  const pIn = num(pr?.prompt);
+  const pOut = num(pr?.completion);
+  if (pIn !== undefined && pOut !== undefined && pIn >= 0 && pOut >= 0) {
+    const pCache = num(pr?.input_cache_read) ?? pIn;
+    priceUsd = { in: pIn * 1e6, cache: pCache * 1e6, out: pOut * 1e6 };
+  }
+  return { id, label: label?.trim() || id, context, vision, priceUsd };
+}
+
+/** Ambil daftar model dari endpoint `/models` penyedia (format OpenAI). */
+export async function listModels(provider: ProviderConfig): Promise<RemoteModel[]> {
+  const name = provider.name;
+  const url = `${provider.baseUrl.replace(/\/+$/, '')}/models`;
+  const key = provider.apiKey.trim();
+  let res: Response;
+  try {
+    res = await httpFetch(url, { headers: key ? { Authorization: `Bearer ${key}` } : {} });
+  } catch {
+    throw new ApiError('offline', await connectFailMessage(url, name));
+  }
+  if (!res.ok) throw errorFromStatus(res.status, await readError(res), name);
+  const body = (await res.json().catch(() => null)) as { data?: unknown; models?: unknown } | unknown[] | null;
+  const list = Array.isArray(body) ? body : Array.isArray((body as Raw | null)?.data) ? ((body as Raw).data as unknown[]) : Array.isArray((body as Raw | null)?.models) ? ((body as Raw).models as unknown[]) : null;
+  if (!list) throw new ApiError('invalid', `${name} tidak mengirim daftar model dengan format yang dikenal.`);
+  return list
+    .map((m) => (m && typeof m === 'object' ? parseRemote(m as Raw) : null))
+    .filter((m): m is RemoteModel => !!m)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
