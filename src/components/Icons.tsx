@@ -227,3 +227,20 @@ export const IconList = (p: P) => (
     <path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" />
   </Svg>
 );
+export const IconMask = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 5c2.5 1.2 5.2 1.8 8 1.8S17.5 6.2 20 5v6c0 5-3.6 8.5-8 9-4.4-.5-8-4-8-9z" />
+    <path d="M8 11.2c.8-.6 1.8-.6 2.6 0M13.4 11.2c.8-.6 1.8-.6 2.6 0M9.5 15.2c1.5 1 3.5 1 5 0" />
+  </Svg>
+);
+export const IconBook = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z" />
+    <path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5M8 7h8" />
+  </Svg>
+);
+export const IconImport = (p: P) => (
+  <Svg {...p}>
+    <path d="M12 3v12M7 10l5 5 5-5M4 19h16" />
+  </Svg>
+);

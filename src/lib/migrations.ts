@@ -11,8 +11,9 @@ import { updateSettings } from './settings';
  * 2 = daftar penyedia AI tersimpan, model bawaan ditandai
  * 3 = Versi 2.0.0: TokenKoding bawaan (penyedia TokenKoding buatan sendiri diubah jadi bawaan), biaya minimum
  * 4 = Versi 2.1.0: catatan cerita, ringkasan bab, catatan biaya di luar chat
+ * 5 = Versi 3.0.0: roleplay (karakter, persona, lorebook, ringkasan pesan)
  */
-export const DATA_VERSION = 4;
+export const DATA_VERSION = 5;
 
 const VERSION_KEY = 'dataVersion';
 const SNAPSHOT_KEY = 'snapshot:pre-update';

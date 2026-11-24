@@ -2,7 +2,7 @@
 
 Aplikasi Android (PWA dan APK) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, TokenKoding, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan. Mulai Versi 3 ada modul **Roleplay** (bagian 14).
 
-Status: Versi 1 dan 2 selesai. **Versi 3 (Roleplay): rancangan, menunggu persetujuan.**
+Status: Versi 1, 2, dan 3 (Roleplay, 3.0.0) selesai.
 
 ---
 
@@ -308,7 +308,7 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 
 | # | Fitur | Rilis |
 |---|---|---|
-| 1 | Tab Roleplay, karakter (tulis sendiri, buat dengan AI, impor kartu PNG/JSON), persona, chat roleplay dengan versi balasan, edit/hapus pesan, Bantu persona, memori chat, ringkasan pesan lama, lorebook, pengingat aturan, ekspor kartu, backup | 3.0.0 |
+| 1 | Tab Roleplay, karakter (tulis sendiri, buat dengan AI, impor kartu PNG/JSON), persona, chat roleplay dengan versi balasan, edit/hapus pesan, Bantu persona, memori chat, ringkasan pesan lama, lorebook, pengingat aturan, ekspor kartu, backup | 3.0.0 ✓ |
 | 2 | Group chat (beberapa karakter dalam satu chat), cabang chat dari pesan tertentu | menyusul |
 
 **Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat. Untuk Roleplay: galeri/berbagi karakter publik, script lorebook, suara (TTS).
@@ -362,13 +362,14 @@ Tab Roleplay ─┬─ Halaman karakter ─┬─ Chat roleplay
 - **Lanjutkan:** kartu horizontal chat roleplay terakhir: avatar karakter, nama, cuplikan pesan terakhir, waktu.
 - **Karakter:** daftar karakter (avatar, nama, tag, jumlah chat), urut terakhir dipakai. Yang di-pin di atas. Filter tag.
 - **Menu `⋯` / tahan lama karakter:** edit, pin, duplikat, ekspor kartu, hapus.
+- **Bawah daftar:** tautan **Persona saya** dan **Lorebook dunia**.
 - **Bar bawah:** 🔍 Cari · **＋ Karakter baru** · 👤 Persona saya.
   - ＋ Karakter baru membuka sheet: **Tulis sendiri** · **Buat dengan AI** · **Impor kartu** (PNG/JSON).
 - **Kosong:** ajakan "Buat karakter pertama" dengan ketiga pilihan di atas.
 
 ### 14.3 Halaman karakter
 - Avatar besar, nama, tag, dan **catatan pembuat** (kalau ada; tidak dikirim ke AI).
-- **Mulai chat:** kalau ada beberapa pesan pembuka, pilih dulu (bisa juga diganti di chat sebelum Anda membalas). Persona memakai persona yang diikat ke karakter ini, atau persona bawaan.
+- **Mulai chat:** kalau ada beberapa pesan pembuka, pilih dulu (bisa juga diganti di chat sebelum Anda membalas). Persona memakai persona yang diikat ke karakter ini, atau persona bawaan. Kalau belum ada persona sama sekali, aplikasi menanyakan nama Anda dulu dan membuat persona bawaan.
 - **Chat dengan karakter ini:** judul, cuplikan pesan terakhir, waktu. Tahan lama: ganti nama, duplikat, hapus.
 - **Menu `⋯`:** edit karakter, lorebook karakter, ekspor kartu (PNG/JSON), duplikat, hapus (chat-chatnya ikut ke Sampah).
 
@@ -390,9 +391,10 @@ Kolom (label Indonesia, nama kolom kartu dalam kurung):
 | *Lanjutan:* Catatan pembuat (`creator_notes`) | Tidak dikirim ke AI |
 | *Lanjutan:* Persona yang diikat | Persona yang otomatis dipakai di chat baru dengan karakter ini |
 
+- **Tersimpan otomatis** begitu nama terisi (seperti page). Tombol **Selesai** membuka halaman karakter.
 - Perkiraan token kartu tampil di bawah, dengan peringatan kalau kartu sangat besar (mis. > 3.000 token).
 - **Buat dengan AI:** tulis ide singkat (mis. "gitaris band SMA yang sinis tapi peduli, latar Bandung 2005"), AI mengisi semua kolom. Hasilnya ditampilkan di editor untuk diperiksa, tidak langsung disimpan.
-- **✦ per kolom:** Kembangkan / Persingkat / Perbaiki satu kolom dengan AI (memakai mekanisme tulis ulang Versi 2).
+- **✦ per kolom:** Kembangkan / Persingkat / Perbaiki satu kolom dengan AI. Hasil langsung masuk ke kolom, dengan tautan **Urungkan**.
 - **Terjemahkan ke bahasa Indonesia:** untuk kartu impor berbahasa lain. AI menerjemahkan semua kolom; hasilnya diperiksa dulu.
 - Penanda `{{char}}` dan `{{user}}` boleh dipakai di semua kolom.
 
@@ -413,7 +415,7 @@ Kolom (label Indonesia, nama kolom kartu dalam kurung):
 - **Tahan pesan:** Salin · Edit (semua pesan, milik Anda maupun karakter; mengedit pesan lama tidak menulis ulang pesan sesudahnya) · Hapus pesan ini · Hapus dari sini ke bawah · Coba lagi (balasan terakhir).
 - **Kolom ketik:** teks · chip model · tombol **✦ Bantu persona** · tombol kirim.
   - **Bantu persona** (*impersonate*): AI menulis giliran Anda sebagai persona, sesuai alur terakhir. Kalau kolom ketik berisi arahan singkat (mis. "aku menolak dengan halus lalu pergi"), AI mengembangkannya. Hasil masuk ke **kolom ketik** untuk diedit, tidak langsung dikirim. Coba lagi dengan mengetuk tombolnya lagi.
-  - **✦ Perhalus pesanku:** di menu tahan pesan Anda yang belum dibalas, atau dari kolom ketik (pilih teks).
+  - Kalau kolom ketik berisi teks, tombol **✦ Bantu** membuka pilihan: Kembangkan jadi giliran utuh, atau **Perhalus pesanku**. Perhalus juga ada di menu tahan pesan Anda yang paling akhir. Hasil ditampilkan dulu (Ganti / Coba lagi / Batal).
   - Kolom kosong → tombol kirim menjadi **Lanjutkan**: karakter melanjutkan adegan tanpa giliran Anda.
   - Selama AI menulis → tombol **Stop**. Teks yang sudah masuk tetap tersimpan.
 - **Panjang balasan** per chat: Pendek (±100–200 kata) · Normal (±250–400 kata, bawaan) · Panjang (±500–800 kata).
@@ -438,8 +440,8 @@ system    : instruksi roleplay bawaan (atau instruksi sistem khusus kartu)
             + persona Anda
             + contoh dialog
             + entri lorebook "selalu dikirim"
-user      : [ringkasan pesan lama 1..n]        ← kalau ringkasan dipakai
-assistant : pesan pembuka
+assistant : pesan pembuka (selalu utuh)
+user      : [ringkasan pesan lama 1..n]        ← kalau ringkasan dipakai, di posisi kronologisnya
 user      : pesan Anda 1
 assistant : balasan 1 (versi yang dipilih)
 ...
@@ -459,6 +461,7 @@ user      : pesan Anda terbaru
 - Setelah impor, editor terbuka untuk diperiksa. Kalau kartu bukan berbahasa Indonesia, editor menawarkan **Terjemahkan ke bahasa Indonesia**.
 - **Ekspor:** PNG (avatar + data kartu V2) dan JSON, lewat menu share atau simpan file.
 - Janitor AI tidak menyediakan unduhan kartu resmi, jadi karakter dari sana disalin manual ke editor.
+- Format file backup naik ke skema 2. Aplikasi versi lama menolak backup baru dengan pesan "perbarui aplikasi dulu", supaya data roleplay tidak hilang diam-diam.
 
 ### 14.10 Data
 | Entitas | Isi utama |
