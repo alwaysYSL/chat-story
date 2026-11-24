@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, type Chat } from '../db';
 import { IconEdit, IconMore, IconTrash } from '../components/Icons';
-import { BottomBar, PromptSheet, Sheet, SheetItem, TopTabs, toast, useLongPress } from '../components/ui';
+import { BottomBar, PromptSheet, Sheet, SheetItem, toast, useLongPress } from '../components/ui';
 import { markChanged } from '../lib/settings';
 import { displayTitle, trashChat } from '../lib/pages';
 import { timeAgo } from '../lib/util';
@@ -49,7 +49,6 @@ export default function Chats() {
 
   return (
     <div className="screen tab-screen">
-      <TopTabs />
       <div className="scroll-area">
         {chats && chats.length === 0 && (
           <div className="empty">

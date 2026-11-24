@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { IconBack } from '../components/Icons';
+import { Link, useLocation } from 'react-router-dom';
 import { ConfirmSheet, Sheet, SheetItem, Toggle, toast } from '../components/ui';
 import { getSnapshotInfo, snapshotBlob, type SnapshotInfo } from '../lib/migrations';
-import { goBack } from '../lib/nav';
-import { goTab } from '../components/TabSwipe';
 import { isNative } from '../lib/native';
 import { AUTO_KEEP } from '../lib/autobackup';
 import { backupFileName, createBackup, markBackedUp, restoreBackup } from '../lib/backup';
@@ -72,7 +69,6 @@ function Segmented<T extends string>({
 
 export default function SettingsScreen() {
   const s = useSettings();
-  const nav = useNavigate();
   const loc = useLocation();
   const [storage, setStorage] = useState<{ used: string; persisted: boolean } | null>(null);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
@@ -149,17 +145,8 @@ export default function SettingsScreen() {
 
   return (
     <div className="screen tab-screen">
-      <header className="page-header">
-        <button
-          className="icon-btn"
-          aria-label="Kembali"
-          onClick={() => ((loc.state as { tabFromHome?: boolean } | null)?.tabFromHome ? goTab(nav, loc, 'settings', 'home') : goBack(nav))}
-        >
-          <IconBack />
-        </button>
-        <div className="chat-head-title">Pengaturan</div>
-      </header>
       <div className="scroll-area settings">
+        <h1 className="tab-title">Pengaturan</h1>
         <section id="penyedia">
           <h3>Penyedia AI</h3>
           <p className="note">
