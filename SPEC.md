@@ -2,7 +2,7 @@
 
 Aplikasi Android (PWA dan APK) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, TokenKoding, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan. Mulai Versi 3 ada modul **Roleplay** (bagian 14).
 
-Status: Versi 1, 2, 3.0, dan 3.1 selesai. **Versi 3.2 (group chat): garis besar, dibahas sebelum dikerjakan.**
+Status: Versi 1, 2, 3.0, dan 3.1 selesai. **Versi 3.2 (group chat): rancangan, menunggu persetujuan.**
 
 ---
 
@@ -553,10 +553,59 @@ user      : pesan Anda terbaru
   - **Ragam bahasa:** baku · santai (bawaan) · gaul.
 - Dikirim sebagai blok "[Gaya]" di akhir permintaan (bersama pengingat), jadi mengubah gaya tidak mereset cache. Kalau sudut pandang bukan orang ketiga, instruksi bawaan menyesuaikan.
 
-### 14.13 Versi 3.2: Group chat (garis besar)
-Rancangan detail dibahas lagi sebelum dikerjakan.
-- Chat dengan 2–5 karakter (dibuat dari tab Roleplay → Group chat baru, atau menambah karakter ke chat yang ada). Satu persona untuk pengguna.
-- Setiap balasan ditulis oleh satu karakter, dengan avatar dan namanya.
-- **Giliran bicara:** Otomatis (AI memilih karakter yang paling wajar menanggapi, mengutamakan yang disebut namanya) · Berurutan · Manual (ketuk avatar di atas kolom ketik untuk memilih siapa yang bicara berikutnya). Karakter bisa dibisukan sementara.
-- Semua kartu dikirim di bagian tetap (kena cache); lorebook semua karakter digabung; memori, ringkasan, pesan tersemat, dan gaya berlaku untuk chat itu.
-- Coba lagi, versi, cabang, Bantu persona, saran balasan, dan Jadikan cerita tetap bisa dipakai.
+### 14.13 Versi 3.2: Group chat
+
+#### a. Membuat dan mengelola grup
+- **Buat:** tab Roleplay → ＋ → **Group chat baru**. Pilih 2–5 karakter (urutan pilihan = urutan anggota), persona, dan nama grup (bawaan: nama-nama anggota, mis. "Rika, Sari & Bayu").
+- **Pembuka:** pilih karakter yang membuka dan pembukanya (dari pembuka kartu karakter itu), atau **Tanpa pembuka** (Anda yang mulai). Pembuka bisa digeser selama belum dibalas, seperti chat biasa.
+- **Ubah chat 1:1 jadi grup:** menu chat → Anggota → Tambah karakter. Chat yang sama berlanjut; pesan lama tetap.
+- **Menu chat → Anggota:**
+  - Daftar anggota dengan avatar (ketuk = jendela foto), atur urutan, **bisukan** sementara (tidak mendapat giliran otomatis/berurutan, tetap ada di cerita, masih bisa dipilih manual), dan keluarkan dari grup.
+  - Karakter yang dikeluarkan atau dihapus: pesan lamanya tetap tampil dengan nama dan avatarnya (nama disimpan di pesan) dan tetap dikirim ke AI sebagai riwayat; kartunya tidak dikirim lagi.
+  - Minimal satu anggota. Grup dengan satu anggota berperilaku seperti chat biasa.
+- **Skenario grup** (opsional, menu chat): kalau diisi, menggantikan skenario masing-masing kartu (skenario kartu biasanya ditulis untuk berdua dengan {{user}} dan bisa bertentangan). Kosong = skenario semua kartu dikirim, berlabel nama karakter.
+
+#### b. Tampilan
+- Kepala chat: avatar anggota bertumpuk (maks. 3 + "+n"), nama grup, chip persona. Ketuk avatar bertumpuk = sheet Anggota.
+- Setiap balasan menampilkan avatar dan nama karakter yang bicara.
+- **Baris anggota** di atas kolom ketik: avatar kecil anggota yang tidak dibisukan; karakter yang akan bicara berikutnya diberi cincin. Ketuk avatar = karakter itu yang menjawab berikutnya (sekali); ketuk lagi = kembali otomatis.
+- Tab Roleplay: grup tampil di **Lanjutkan** dengan avatar bertumpuk. Halaman karakter: grup yang diikuti karakter itu tampil di daftar chat, ditandai 👥.
+
+#### c. Giliran bicara
+- **Mode** (menu chat → Giliran bicara):
+  - **Otomatis** (bawaan), tanpa biaya tambahan. Urutan pilihan: (1) karakter yang dipilih di baris anggota; (2) karakter yang namanya disebut paling akhir di pesan Anda; (3) karakter yang disebut di balasan terakhir (mis. ditanya karakter lain), selain yang baru bicara; (4) anggota yang paling lama tidak bicara. Karakter yang baru saja bicara tidak dipilih lagi, kecuali satu-satunya anggota aktif.
+  - **Berurutan:** bergiliran sesuai urutan anggota.
+  - **Manual:** tidak ada balasan otomatis setelah Anda mengirim; ketuk avatar di baris anggota untuk memilih siapa yang menjawab.
+- **Balasan per giliran:** 1 (bawaan) · hingga 2 · hingga 3. Setelah Anda mengirim, karakter berikutnya ikut menanggapi berantai (setiap balasan = satu permintaan; karakter yang sudah menjawab di giliran itu tidak dipilih lagi). Stop menghentikan seluruh rantai.
+- **Lanjutkan** (kolom kosong): karakter berikutnya menurut mode yang berlaku melanjutkan adegan. Di mode Manual, Lanjutkan meminta Anda memilih karakter dulu.
+
+#### d. Susunan pesan
+```
+system    : instruksi roleplay grup
+            + kartu semua anggota, masing-masing berlabel nama (deskripsi, kepribadian)
+            + skenario grup, atau skenario tiap kartu berlabel
+            + persona Anda
+            + contoh dialog tiap kartu (berlabel)
+            + lore "selalu dikirim" dari semua lorebook anggota (tanpa duplikat)
+assistant : Rika: pembuka
+user      : giliran Anda
+assistant : Rika: …
+            Sari: …          ← balasan berurutan digabung dalam satu giliran assistant
+user      : giliran Anda terbaru
+            + [lore cocok] + [memori] + [momen tersemat] + [pengingat pembicara + chat] + [gaya]
+            + [Giliran berikutnya: Sari. Tulis HANYA sebagai Sari.] + target panjang   ← tidak disimpan
+```
+- Di riwayat, setiap balasan diberi label nama pembicara ("Rika: …") dengan format yang selalu sama, supaya kena cache.
+- **Instruksi grup:** memerankan beberapa tokoh; setiap balasan hanya sebagai tokoh yang diminta; tidak menulis ucapan/aksi {{user}} maupun anggota grup lain (mereka mendapat gilirannya sendiri); tokoh figuran di luar grup boleh diperankan; sudut pandang, tempo, dan ragam bahasa mengikuti Gaya cerita chat.
+- `{{char}}` di setiap kartu diganti nama karakter kartu itu; di instruksi akhir diganti nama pembicara.
+- **Pengaman balasan:** label nama pembicara di awal dibuang; balasan dipotong kalau mulai ada baris berlabel {{user}} atau anggota lain.
+- Pengingat aturan kartu (`post_history_instructions`) dan depth prompt: hanya milik karakter yang sedang bicara. Kreativitas: milik pembicara. Model: pilihan di chat → model terakhir di chat → model bawaan anggota pertama → default.
+- Lorebook: lorebook karakter semua anggota + lorebook dunia yang dipasang ke salah satu anggota (tanpa duplikat); batas token per lorebook seperti biasa.
+- Menambah, mengeluarkan, membisukan, atau mengurutkan anggota dan mengubah skenario grup mengubah bagian system, jadi cache dimulai ulang sekali.
+
+#### e. Fitur yang tetap berlaku
+- **Coba lagi** menulis ulang balasan oleh karakter yang sama. Menu balasan → **Tulis ulang sebagai…** memilih anggota lain (jadi versi baru dengan pembicara itu; setiap versi menyimpan pembicaranya).
+- Versi, Sambung balasan, edit, hapus, semat, cari, cabang, duplikat, memori, ringkasan (transkrip memakai nama pembicara), Bantu persona, saran balasan, gaya cerita, pratinjau (kartu tiap anggota tampil terpisah dengan tokennya), dan Jadikan cerita.
+- Usulan memori untuk grup mencakup hubungan antar tokoh.
+- Riwayat biaya chat seperti biasa; riwayat biaya karakter memasukkan grup yang diikutinya.
+- Backup dan restore mencakup grup.
