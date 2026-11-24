@@ -45,6 +45,7 @@ Bar bawah (di Beranda, tab Chat, dan page): **🔍 Cari · Ask AI · ✏️ Page
 **Geser antar layar utama** (Versi 2): urutan **Pengaturan ← Beranda → Chat → Roleplay** (tab Roleplay mulai Versi 3, lihat 14.1). Geser jari ke kiri untuk layar di kanan, ke kanan untuk layar di kiri; tombol di atas (avatar, Beranda, Chat) tetap bisa diketuk.
 - Tidak aktif kalau gerakan dimulai di tepi layar (dipakai gestur back Android), di kolom isian, atau di area yang bisa digeser ke samping (kartu Terbaru).
 - Layar sebelah ikut bergeser menempel jari (seperti ViewPager Android). Di layar paling ujung, layar tidak bergeser.
+- **Bar tab di atas tetap diam** (dipakai bersama ketiga layar); hanya isi layar yang bergeser. Penanda tab aktif bergeser dan berubah bentuk mengikuti jari (lingkaran di avatar Pengaturan, pil di Beranda dan Chat), dengan animasi yang sama dengan isi layar. Pengaturan tidak lagi punya tombol ‹ sendiri; kembali lewat tab Beranda atau tombol back Android.
 - Riwayat: Beranda adalah akar. Back dari Chat atau Pengaturan selalu kembali ke Beranda, tidak bolak-balik antar tab.
 
 ---

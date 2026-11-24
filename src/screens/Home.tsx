@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { db, type Page } from '../db';
 import { IconChevron, IconChevronDown, IconMore, IconPlus } from '../components/Icons';
 import { PageMenu } from '../components/PageMenu';
-import { BottomBar, TopTabs } from '../components/ui';
+import { BottomBar } from '../components/ui';
 import { createChapter, displayTitle } from '../lib/pages';
 import { getLastChangeAt, useSettings } from '../lib/settings';
 import { formatNumber, timeAgo } from '../lib/util';
@@ -65,7 +65,6 @@ export default function Home() {
 
   return (
     <div className="screen tab-screen">
-      <TopTabs />
       <div className="scroll-area">
         {needBackup && (
           <button className="banner" onClick={() => nav('/settings#backup')}>

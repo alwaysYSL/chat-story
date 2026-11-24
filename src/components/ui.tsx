@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { goTab, type Tab } from './TabSwipe';
-import { IconChat, IconEdit, IconHome, IconSearch, IconSparkle } from './Icons';
+import { useNavigate } from 'react-router-dom';
+import { IconEdit, IconSearch, IconSparkle } from './Icons';
 import { backStack, isNative } from '../lib/native';
 import { createStory } from '../lib/pages';
 
@@ -240,25 +239,6 @@ export function PromptSheet({
 
 /* ---------- Navigasi atas & bawah ---------- */
 
-export function TopTabs() {
-  const nav = useNavigate();
-  const loc = useLocation();
-  const cur: Tab = loc.pathname.startsWith('/chats') ? 'chats' : loc.pathname.startsWith('/settings') ? 'settings' : 'home';
-  const go = (to: Tab) => goTab(nav, loc, cur, to);
-  return (
-    <div className="top-tabs">
-      <button className={'avatar' + (cur === 'settings' ? ' active' : '')} aria-label="Pengaturan" onClick={() => go('settings')}>
-        CS
-      </button>
-      <button className={'tab-pill' + (cur === 'home' ? ' active' : '')} aria-label="Beranda" onClick={() => go('home')}>
-        <IconHome size={20} />
-      </button>
-      <button className={'tab-pill' + (cur === 'chats' ? ' active' : '')} aria-label="Chat" onClick={() => go('chats')}>
-        <IconChat size={20} />
-      </button>
-    </div>
-  );
-}
 
 export function BottomBar({ askHref, askState }: { askHref: string; askState?: unknown }) {
   const nav = useNavigate();

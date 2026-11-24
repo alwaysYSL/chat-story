@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { IconChat, IconHome } from './Icons';
 import { useLocation, useNavigate, type Location, type NavigateFunction } from 'react-router-dom';
 
 /**
@@ -73,6 +74,55 @@ export function TabPager({ panes }: { panes: Record<Tab, ReactNode> }) {
   const settleTimer = useRef(0);
   /** tab yang sudah dituju animasi geser (rute menyusul sesaat kemudian) */
   const sliding = useRef<number | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const indRef = useRef<HTMLSpanElement>(null);
+  const tabRects = useRef<{ left: number; width: number }[]>([]);
+  const lastP = useRef(idx);
+
+  /**
+   * Penanda tab aktif mengikuti posisi geser. `p` = posisi pecahan (mis. 1,4 = 40% dari Beranda ke Chat),
+   * `dur` = durasi animasi yang sama dengan isi layar, supaya bergerak bersamaan.
+   */
+  const moveIndicator = (p: number, dur = 0) => {
+    lastP.current = p;
+    const ind = indRef.current;
+    const rects = tabRects.current;
+    const bar = barRef.current;
+    if (!ind || !bar || rects.length !== TAB_ORDER.length) return;
+    const q = Math.max(0, Math.min(TAB_ORDER.length - 1, p));
+    const i0 = Math.floor(q);
+    const i1 = Math.min(i0 + 1, TAB_ORDER.length - 1);
+    const f = q - i0;
+    const left = rects[i0].left + (rects[i1].left - rects[i0].left) * f;
+    const width = rects[i0].width + (rects[i1].width - rects[i0].width) * f;
+    ind.style.transition = dur ? `transform ${dur}ms ${EASE}, width ${dur}ms ${EASE}` : 'none';
+    ind.style.transform = `translate3d(${left}px, 0, 0)`;
+    ind.style.width = `${width}px`;
+    ind.style.opacity = '1';
+    // Ikon yang paling dekat dengan penanda tampil aktif.
+    const near = Math.round(q);
+    bar.querySelectorAll<HTMLElement>('[data-tab-btn]').forEach((b, i) => b.classList.toggle('active', i === near));
+  };
+  const indicatorRef = useRef(moveIndicator);
+  indicatorRef.current = moveIndicator;
+
+  // Ukur posisi tombol tab (ulang saat ukuran layar berubah).
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const measure = () => {
+      const base = bar.getBoundingClientRect().left;
+      tabRects.current = [...bar.querySelectorAll<HTMLElement>('[data-tab-btn]')].map((b) => {
+        const r = b.getBoundingClientRect();
+        return { left: r.left - base, width: r.width };
+      });
+      indicatorRef.current(lastP.current);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, []);
 
   /** Layar sebelah hanya digambar saat sedang digeser atau dianimasikan (selain itu disembunyikan, hemat tenaga). */
   const moving = (on: boolean, after = 0) => {
@@ -98,6 +148,7 @@ export function TabPager({ panes }: { panes: Record<Tab, ReactNode> }) {
     sliding.current = null;
     const dur = mounted.current ? 280 : 0;
     mounted.current = true;
+    indicatorRef.current(idx, dur);
     if (dur) {
       movingRef.current(true);
       movingRef.current(false, dur + 60);
@@ -121,6 +172,7 @@ export function TabPager({ panes }: { panes: Record<Tab, ReactNode> }) {
     const place = (offset: number, dur = 0) => {
       strip.style.transition = dur ? `transform ${dur}ms ${EASE}` : 'none';
       strip.style.transform = `translate3d(calc(${-curIdx() * 100}% + ${offset}px), 0, 0)`;
+      indicatorRef.current(curIdx() - offset / (root.clientWidth || 1), dur);
     };
 
     const onStart = (e: TouchEvent) => {
@@ -217,6 +269,7 @@ export function TabPager({ panes }: { panes: Record<Tab, ReactNode> }) {
         sliding.current = to;
         strip.style.transition = `transform ${dur}ms ${EASE}`;
         strip.style.transform = `translate3d(${-to * 100}%, 0, 0)`;
+        indicatorRef.current(to, dur);
         movingRef.current(true);
         movingRef.current(false, dur + 60);
         requestAnimationFrame(() => requestAnimationFrame(() => goTab(n, l, cur, next)));
@@ -248,14 +301,30 @@ export function TabPager({ panes }: { panes: Record<Tab, ReactNode> }) {
     };
   }, []);
 
+  const go = (to: Tab) => goTab(nav, loc, tab, to);
   return (
     <div className="pager" ref={rootRef}>
-      <div className="pager-strip" ref={stripRef}>
-        {TAB_ORDER.map((t, i) => (
-          <div key={t} className="pager-pane" data-tab={t} inert={i !== idx} aria-hidden={i !== idx}>
-            {panes[t]}
-          </div>
-        ))}
+      {/* Bar tab tetap diam; hanya isi layar di bawahnya yang bergeser. */}
+      <div className="tab-bar" ref={barRef} role="tablist">
+        <span className="tab-indicator" ref={indRef} aria-hidden="true" />
+        <button data-tab-btn role="tab" aria-selected={tab === 'settings'} className={'avatar' + (tab === 'settings' ? ' active' : '')} aria-label="Pengaturan" onClick={() => go('settings')}>
+          <span>CS</span>
+        </button>
+        <button data-tab-btn role="tab" aria-selected={tab === 'home'} className={'tab-pill' + (tab === 'home' ? ' active' : '')} aria-label="Beranda" onClick={() => go('home')}>
+          <IconHome size={20} />
+        </button>
+        <button data-tab-btn role="tab" aria-selected={tab === 'chats'} className={'tab-pill' + (tab === 'chats' ? ' active' : '')} aria-label="Chat" onClick={() => go('chats')}>
+          <IconChat size={20} />
+        </button>
+      </div>
+      <div className="pager-view">
+        <div className="pager-strip" ref={stripRef}>
+          {TAB_ORDER.map((t, i) => (
+            <div key={t} className="pager-pane" data-tab={t} inert={i !== idx} aria-hidden={i !== idx}>
+              {panes[t]}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
