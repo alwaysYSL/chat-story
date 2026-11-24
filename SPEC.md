@@ -2,7 +2,7 @@
 
 Aplikasi Android (PWA dan APK) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, TokenKoding, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan. Mulai Versi 3 ada modul **Roleplay** (bagian 14).
 
-Status: Versi 1, 2, dan 3 (Roleplay, 3.0.0) selesai.
+Status: Versi 1, 2, dan 3.0 (Roleplay) selesai. **Versi 3.1 dan 3.2: rancangan, menunggu persetujuan.**
 
 ---
 
@@ -309,7 +309,9 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 | # | Fitur | Rilis |
 |---|---|---|
 | 1 | Tab Roleplay, karakter (tulis sendiri, buat dengan AI, impor kartu PNG/JSON), persona, chat roleplay dengan versi balasan, edit/hapus pesan, Bantu persona, memori chat, ringkasan pesan lama, lorebook, pengingat aturan, ekspor kartu, backup | 3.0.0 ✓ |
-| 2 | Group chat (beberapa karakter dalam satu chat), cabang chat dari pesan tertentu | menyusul |
+| 2 | Perbaikan: persona terhapus, ringkasan per blok, chat panjang, batas konteks roleplay, riwayat biaya karakter, kata kunci kedua lorebook, pengaman balasan, kotak teks di sheet | 3.0.1 ✓ |
+| 3 | Foto avatar (lihat, perbesar, crop saat unggah), model & kreativitas per karakter, lihat yang dikirim ke AI, saran balasan, cabang chat, sematkan & cari pesan, jadikan cerita, gaya cerita per chat (bagian 14.12) | 3.1.0 |
+| 4 | Group chat: beberapa karakter dalam satu chat (bagian 14.13) | 3.2.0 |
 
 **Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat. Untuk Roleplay: galeri/berbagi karakter publik, script lorebook, suara (TTS).
 
@@ -485,4 +487,75 @@ user      : pesan Anda terbaru
 ### 14.11 Biaya
 - Setiap balasan menampilkan biaya seperti chat cerita. Bantu persona, ringkasan, usulan memori, dan perhalus dicatat di **riwayat biaya** chat. Halaman karakter → Riwayat biaya merangkum total tiap chat ditambah Buat dengan AI, terjemahan, dan ✦ per kolom. Biaya bantuan AI untuk persona tampil di Persona saya.
 - Chat panjang: hanya 120 pesan terakhir yang digambar (tombol **Tampilkan pesan sebelumnya** untuk yang lebih lama), dan baris pesan yang tidak berubah tidak digambar ulang saat mengetik atau saat AI menulis.
-- Chat roleplay biasanya panjang, jadi peringatan batas konteks (85%) dan ringkasan otomatis (60%) sama pentingnya dengan di cerita.
+- Chat roleplay biasanya panjang, jadi peringatan batas konteks (85% batas model) dan ringkasan otomatis (batas konteks roleplay) sama pentingnya dengan di cerita.
+
+### 14.12 Versi 3.1
+
+#### a. Foto avatar
+- **Lihat foto:** ketuk avatar karakter atau persona di chat roleplay (di kepala chat, di samping pesan, dan di chip persona), juga avatar besar di halaman karakter. Foto muncul sebagai **jendela kecil yang melayang** di atas chat, seperti picture-in-picture.
+  - **Latar tidak digelapkan.** Chat di belakangnya tetap terlihat dan tetap bisa digulir dan dibaca. Ketuk di luar jendela tidak menutupnya.
+  - Ukuran awal kira-kira 60% lebar layar, cukup untuk dilihat tanpa menutupi seluruh chat. Posisi awal di tengah agak ke atas.
+  - **Geser jendela** untuk memindahkannya. Jendela tidak bisa keluar layar: tepinya berhenti di tepi layar.
+  - **Cubit** atau **tahan pegangan di sudut jendela lalu geser** untuk memperbesar/memperkecil (dari ±120 px sampai selebar/setinggi layar). Foto ikut membesar bersama jendelanya.
+  - **Ketuk dua kali** untuk bergantian antara ukuran awal dan ukuran besar.
+  - Tombol kecil **✕** di pojok kanan atas jendela menutupnya. Tombol back Android juga menutup. Nama karakter/persona tampil kecil di bawah foto.
+  - Membuka avatar lain mengganti isi jendela, posisi dan ukurannya tetap.
+- **Foto asli disimpan** (sisi terpanjang maks. 1600 px) di samping avatar bulat, supaya overlay menampilkan foto utuh (mis. foto potret dari kartu Chub), bukan hanya potongan persegi. Avatar bulat dibuat dari foto asli sesuai potongan (crop) yang dipilih. Kartu impor PNG: gambar kartu menjadi foto asli.
+- **Unggah foto (karakter dan persona):**
+  1. Pilih foto dari galeri.
+  2. **Indikator proses** tampil di atas editor: "Membaca foto… / Memproses…" dengan persentase saat membaca file, lalu animasi saat memperkecil. Tombol lain di editor nonaktif sampai selesai. Semua proses terjadi di HP (tidak ada unggahan ke internet); indikator ini menunjukkan proses di HP.
+  3. **Layar crop:** bingkai lingkaran (pratinjau avatar) di atas foto. Geser foto untuk mengatur posisi, cubit atau slider untuk zoom. Tombol **Batal** dan **Pakai**.
+  4. **Atur ulang potongan** tanpa memilih foto lagi: ketuk avatar di editor → Atur potongan / Ganti foto / Lihat foto / Hapus foto.
+- Backup ikut menyimpan foto asli dan potongannya.
+
+#### b. Model & kreativitas per karakter
+- Editor karakter → Lanjutan: **Model bawaan** (Ikuti pengaturan, atau pilih model) dan **Kreativitas** (Ikuti pengaturan / Stabil / Normal / Liar).
+- Urutan pilihan model di chat: model yang dipilih barusan → model terakhir di chat itu → **model bawaan karakter** → model default Pengaturan.
+- Kreativitas karakter menggantikan kreativitas global untuk balasan karakter itu (Bantu persona dan saran balasan ikut).
+
+#### c. Lihat yang dikirim ke AI
+- Menu chat → **Lihat yang dikirim ke AI**: pratinjau permintaan berikutnya (memakai isi kolom ketik, atau "Lanjutkan" kalau kosong), tanpa mengirim apa pun.
+- Dikelompokkan dengan perkiraan token per bagian: Instruksi · Kartu · Persona · Contoh dialog · Lore selalu · Ringkasan (n blok) · Riwayat (n pesan) · Lore yang cocok · Memori · Momen tersemat · Pengingat & gaya · Target panjang. Total dan perkiraan biaya (dengan cache).
+- Setiap bagian bisa dibuka untuk melihat teks lengkap. Tombol **Salin semua**.
+
+#### d. Saran balasan
+- Tombol **✦ Bantu** → **Saran balasan**: AI memberi **3 pilihan** giliran singkat untuk persona (1–3 kalimat, gaya berbeda: mis. tenang, berani, bercanda), tampil sebagai kartu di atas kolom ketik.
+- Ketuk satu → masuk ke kolom ketik untuk diedit. **↻** meminta 3 saran baru. ✕ menutup.
+- Memakai konteks yang sama dengan Bantu persona; satu permintaan untuk 3 saran. Biaya dicatat di riwayat biaya chat.
+
+#### e. Cabang chat
+- Tahan pesan mana pun → **Buat cabang dari sini**: chat baru berisi semua pesan sampai pesan itu (termasuk versi balasan), memori, pengingat, gaya, persona, dan ringkasan blok yang tersalin utuh. Judul "… (cabang)".
+- Chat cabang menampilkan "↳ Cabang dari *judul chat asal*" di kepala chat (ketuk untuk membuka chat asal). Daftar chat karakter menandai cabang.
+- Berbeda dengan Duplikat (seluruh chat), cabang berhenti di pesan yang dipilih.
+
+#### f. Sematkan & cari pesan
+- Tahan pesan → **Sematkan**. Pesan tersemat diberi tanda 📌.
+- Menu chat → **Pesan tersemat**: daftar pesan tersemat; ketuk untuk melompat ke pesan itu (pesan lama otomatis dimuat, lalu disorot sebentar). Lepas semat dari daftar atau menu pesan.
+- **Dibaca AI sebagai momen penting:** pesan tersemat yang sudah tidak dikirim utuh (sudah masuk ringkasan) dikirim apa adanya di blok "[Momen penting]" di akhir permintaan, maksimal 1.500 token (yang terbaru didahulukan). Pesan tersemat yang masih dikirim utuh tidak diulang. Memori chat tidak diubah.
+- Menu chat → **Cari di chat ini**: cari teks di semua pesan chat, hasil dengan cuplikan; ketuk untuk melompat. Tombol ‹ › untuk hasil berikutnya.
+
+#### g. Jadikan cerita
+- Menu chat → **Jadikan cerita**: mengubah sesi roleplay menjadi naskah prosa di modul cerita.
+- Pilihan:
+  - **Rentang:** seluruh chat, mulai dari pesan tersemat tertentu, atau N pesan terakhir.
+  - **Tujuan:** cerita baru (judul usulan dari judul chat), atau bab baru di cerita yang sudah ada.
+  - **Panjang:** ringkas (±40% dari panjang chat) / seimbang / lengkap (mendekati panjang chat).
+- Proses: transkrip dibagi per ±30 pesan; setiap bagian ditulis ulang AI menjadi prosa orang ketiga berbahasa Indonesia (dialog dipertahankan, aksi dirapikan, sudut pandang konsisten), dengan ringkasan bagian sebelumnya sebagai sambungan. Tulisan mengalir ke page; bagian baru menjadi bab baru kalau melewati batas saran bab (5.000 kata). Bisa dihentikan; bagian yang sudah jadi tetap tersimpan.
+- Cerita baru otomatis mendapat chat utama dengan **brief** yang disusun dari kartu karakter, persona, skenario, dan memori chat (bisa diedit), sehingga Ask AI bisa langsung melanjutkan ceritanya. Tulisan hasil konversi dianggap tulisan penulis (tidak diganti saat Coba lagi).
+- Perkiraan biaya ditampilkan sebelum mulai.
+
+#### h. Gaya cerita per chat
+- Menu chat → **Gaya cerita**:
+  - **Sudut pandang:** orang ketiga (bawaan) · orang kedua ("kamu" untuk {{user}}) · orang pertama (sebagai {{char}}).
+  - **Peran AI:** pemeran {{char}} (bawaan) · narator/game master (AI menjadi narator dunia, memerankan semua tokoh, menggambarkan akibat tindakan {{user}}, dan boleh menawarkan pilihan).
+  - **Tempo:** lambat (banyak detail dan suasana) · sedang · cepat (adegan bergerak maju).
+  - **Ragam bahasa:** baku · santai (bawaan) · gaul.
+- Dikirim sebagai blok "[Gaya]" di akhir permintaan (bersama pengingat), jadi mengubah gaya tidak mereset cache. Kalau sudut pandang bukan orang ketiga, instruksi bawaan menyesuaikan.
+
+### 14.13 Versi 3.2: Group chat (garis besar)
+Rancangan detail dibahas lagi sebelum dikerjakan.
+- Chat dengan 2–5 karakter (dibuat dari tab Roleplay → Group chat baru, atau menambah karakter ke chat yang ada). Satu persona untuk pengguna.
+- Setiap balasan ditulis oleh satu karakter, dengan avatar dan namanya.
+- **Giliran bicara:** Otomatis (AI memilih karakter yang paling wajar menanggapi, mengutamakan yang disebut namanya) · Berurutan · Manual (ketuk avatar di atas kolom ketik untuk memilih siapa yang bicara berikutnya). Karakter bisa dibisukan sementara.
+- Semua kartu dikirim di bagian tetap (kena cache); lorebook semua karakter digabung; memori, ringkasan, pesan tersemat, dan gaya berlaku untuk chat itu.
+- Coba lagi, versi, cabang, Bantu persona, saran balasan, dan Jadikan cerita tetap bisa dipakai.
