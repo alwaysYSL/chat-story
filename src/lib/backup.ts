@@ -14,8 +14,8 @@ interface BackupFile {
   /** Versi 2.1.0: biaya catatan/ringkasan/tulis ulang (tidak ada di backup lama) */
   usage?: UsageLog[];
   /** Versi 3.0.0: roleplay (avatar sebagai data URL) */
-  characters?: (Omit<Character, 'avatar'> & { avatar: string | null })[];
-  personas?: (Omit<Persona, 'avatar'> & { avatar: string | null })[];
+  characters?: (Omit<Character, 'avatar' | 'photo'> & { avatar: string | null; photo?: string | null })[];
+  personas?: (Omit<Persona, 'avatar' | 'photo'> & { avatar: string | null; photo?: string | null })[];
   lorebooks?: Lorebook[];
   rpSummaries?: RpSummary[];
   settings: Partial<Settings>;
@@ -77,7 +77,7 @@ export async function dataToBackupBlob(d: DataSet, exportedAt = Date.now()): Pro
     parts.push(`"${key}":[`);
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      parts.push((i ? ',' : '') + JSON.stringify({ ...r, avatar: r.avatar ? await blobToDataUrl(r.avatar) : null }));
+      parts.push((i ? ',' : '') + JSON.stringify({ ...r, avatar: r.avatar ? await blobToDataUrl(r.avatar) : null, photo: r.photo ? await blobToDataUrl(r.photo) : null }));
     }
     parts.push('],');
   }
@@ -162,9 +162,9 @@ export async function restoreBackup(file: File, mode: 'merge' | 'replace'): Prom
 
   const usage = data.usage ?? [];
   const characters: Character[] = [];
-  for (const c of data.characters ?? []) characters.push(freshTrash({ ...c, avatar: c.avatar ? await dataUrlToBlob(c.avatar) : null }));
+  for (const c of data.characters ?? []) characters.push(freshTrash({ ...c, avatar: c.avatar ? await dataUrlToBlob(c.avatar) : null, photo: c.photo ? await dataUrlToBlob(c.photo) : null }));
   const personas: Persona[] = [];
-  for (const p of data.personas ?? []) personas.push(freshTrash({ ...p, avatar: p.avatar ? await dataUrlToBlob(p.avatar) : null }));
+  for (const p of data.personas ?? []) personas.push(freshTrash({ ...p, avatar: p.avatar ? await dataUrlToBlob(p.avatar) : null, photo: p.photo ? await dataUrlToBlob(p.photo) : null }));
   const lorebooks = (data.lorebooks ?? []).map(freshTrash);
   const rpSummaries = data.rpSummaries ?? [];
   const rpTables = [db.characters, db.personas, db.lorebooks, db.rpSummaries];

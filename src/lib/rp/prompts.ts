@@ -1,4 +1,4 @@
-import type { RpLength } from '../../db';
+import type { RpLength, RpStyle } from '../../db';
 
 /** Instruksi roleplay bawaan (dipakai kalau kartu tidak punya instruksi sistem sendiri). */
 export const SYSTEM_RP = `Kamu adalah narator dan pemeran dalam roleplay fiksi interaktif bersama {{user}}. Kamu memerankan {{char}} dan semua tokoh lain di sekitarnya, kecuali {{user}}.
@@ -9,6 +9,53 @@ export const SYSTEM_RP = `Kamu adalah narator dan pemeran dalam roleplay fiksi i
 - Tanggapi giliran terakhir {{user}}, majukan adegan, dan beri detail indera serta emosi yang sesuai dengan kepribadian {{char}}.
 - Jangan mengulang kalimat atau frasa dari balasan sebelumnya.
 - Akhiri balasan di titik yang memberi kesempatan {{user}} untuk menanggapi.`;
+
+export const DEFAULT_STYLE: RpStyle = { pov: 'third', role: 'actor', pace: 'medium', register: 'santai' };
+
+/**
+ * Instruksi bawaan sesuai sudut pandang dan peran AI. Gaya bawaan menghasilkan teks yang sama persis
+ * dengan SYSTEM_RP (chat lama tetap kena cache).
+ */
+export function systemRp(style?: RpStyle): string {
+  const st = { ...DEFAULT_STYLE, ...style };
+  if (st.pov === 'third' && st.role === 'actor') return SYSTEM_RP;
+  const intro =
+    st.role === 'narrator'
+      ? 'Kamu adalah narator dan game master sebuah roleplay fiksi interaktif bersama {{user}}. Kamu menggambarkan dunia dan suasana, memerankan {{char}} serta semua tokoh lain kecuali {{user}}, dan menceritakan akibat dari setiap tindakan {{user}}.'
+      : 'Kamu adalah narator dan pemeran dalam roleplay fiksi interaktif bersama {{user}}. Kamu memerankan {{char}} dan semua tokoh lain di sekitarnya, kecuali {{user}}.';
+  const pov =
+    st.pov === 'second'
+      ? 'Tulis dalam bahasa Indonesia, dengan narasi orang kedua: sebut {{user}} dengan "kamu", tokoh lain dengan nama atau "dia". Dialog dalam tanda kutip "…", pikiran atau penekanan dengan *miring*.'
+      : st.pov === 'first'
+        ? 'Tulis dalam bahasa Indonesia, dengan narasi orang pertama dari sudut pandang {{char}} ("aku"); sebut {{user}} dengan nama atau "kamu". Dialog dalam tanda kutip "…", pikiran atau penekanan dengan *miring*.'
+        : 'Tulis dalam bahasa Indonesia, dengan narasi orang ketiga. Dialog dalam tanda kutip "…", pikiran atau penekanan dengan *miring*.';
+  const lines = [
+    pov,
+    'JANGAN PERNAH menulis aksi, ucapan, pikiran, atau perasaan {{user}}. {{user}} dimainkan oleh pengguna.',
+    'Tetap dalam peran. Jangan berkomentar di luar cerita dan jangan menyebut dirimu AI.',
+    st.role === 'narrator'
+      ? 'Tanggapi giliran terakhir {{user}}, gambarkan akibatnya, dan majukan cerita. Sesekali boleh menawarkan 2–3 pilihan tindakan singkat di akhir balasan.'
+      : 'Tanggapi giliran terakhir {{user}}, majukan adegan, dan beri detail indera serta emosi yang sesuai dengan kepribadian {{char}}.',
+    'Jangan mengulang kalimat atau frasa dari balasan sebelumnya.',
+    'Akhiri balasan di titik yang memberi kesempatan {{user}} untuk menanggapi.',
+  ];
+  return `${intro}\n\n${lines.map((l) => `- ${l}`).join('\n')}`;
+}
+
+/** Tempo dan ragam bahasa (dikirim di akhir permintaan). Kosong kalau semuanya bawaan. */
+export function styleBlock(style?: RpStyle): string {
+  const st = { ...DEFAULT_STYLE, ...style };
+  const out: string[] = [];
+  if (st.pace === 'slow') out.push('Tempo lambat: perbanyak detail suasana, indera, dan emosi; biarkan adegan berjalan pelan.');
+  if (st.pace === 'fast') out.push('Tempo cepat: adegan bergerak maju, deskripsi singkat, fokus pada aksi dan dialog.');
+  if (st.register === 'baku') out.push('Ragam bahasa baku, baik di narasi maupun dialog.');
+  if (st.register === 'gaul') out.push('Dialog memakai bahasa gaul sehari-hari (mis. gue/lo, slang) sesuai karakter; narasi tetap rapi.');
+  return out.length ? `[Gaya]\n${out.join('\n')}` : '';
+}
+
+export function suggestInstr(): string {
+  return '[Instruksi aplikasi: usulkan 3 pilihan giliran {{user}} berikutnya, masing-masing 1–3 kalimat, dengan nada berbeda (mis. tenang, berani, bercanda), sesuai persona dan alur terakhir. Hanya aksi dan ucapan {{user}}. Keluarkan HANYA array JSON berisi 3 string, tanpa teks lain.]';
+}
 
 export const RP_LENGTH: Record<RpLength, { label: string; min: number; max: number }> = {
   short: { label: 'Pendek', min: 100, max: 200 },

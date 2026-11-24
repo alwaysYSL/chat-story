@@ -2,13 +2,14 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { db, type Character } from '../../db';
-import { IconBack, IconBook, IconChevron, IconChevronDown, IconClose, IconImage, IconPlus, IconSparkle } from '../../components/Icons';
-import { Avatar } from '../../components/rp/Avatar';
+import { IconBack, IconBook, IconChevron, IconChevronDown, IconClose, IconPlus, IconSparkle } from '../../components/Icons';
+import { AvatarPicker } from '../../components/rp/AvatarPicker';
 import { Sheet, SheetItem, Toggle, toast } from '../../components/ui';
 import { goBack } from '../../lib/nav';
-import { estimateTokens } from '../../lib/providers';
+import { estimateTokens, usableModels } from '../../lib/providers';
+import { CREATIVITY_LABEL, useSettings } from '../../lib/settings';
 import { generateCard, improveField, translateCard } from '../../lib/rp/assist';
-import { depthPrompt, makeAvatar, withDepthPrompt } from '../../lib/rp/cards';
+import { depthPrompt, withDepthPrompt } from '../../lib/rp/cards';
 import { emptyCharacter, ensureOwnLorebook, listPersonas, ownLorebook, saveCharacter } from '../../lib/rp/data';
 import { FIELD_ACTIONS } from '../../lib/rp/prompts';
 import { UserError } from '../../lib/generate';
@@ -35,6 +36,8 @@ export default function CharacterEdit() {
   const isNew = id === 'new';
   const stored = useLiveQuery(async () => (isNew ? null : ((await db.characters.get(id)) ?? null)), [id]);
   const personas = useLiveQuery(listPersonas, []);
+  const settings = useSettings();
+  const usable = settings ? usableModels(settings.providers) : [];
   const worlds = useLiveQuery(async () => (await db.lorebooks.filter((b) => !b.characterId && !b.deletedAt).toArray()).sort((a, b) => a.name.localeCompare(b.name)), []);
   const [c, setC] = useState<Character | null>(null);
   const [prev, setPrev] = useState<Partial<Record<TextField, string>>>({});
@@ -45,7 +48,7 @@ export default function CharacterEdit() {
   const [live, setLive] = useState('');
   const [fieldMenu, setFieldMenu] = useState<TextField | null>(null);
   const [offerTranslate, setOfferTranslate] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const saved = useRef(false);
   const bookCount = useLiveQuery(async () => (c ? ((await ownLorebook(c.id))?.entries.length ?? 0) : 0), [c?.id]);
 
@@ -126,7 +129,7 @@ export default function CharacterEdit() {
           </button>
         )}
         {ai && (
-          <button className="icon-btn small" aria-label={`Bantu AI: ${label}`} disabled={!!busy} onClick={() => setFieldMenu(key)}>
+          <button className="icon-btn small" aria-label={`Bantu AI: ${label}`} disabled={!!busy || photoBusy} onClick={() => setFieldMenu(key)}>
             <IconSparkle size={16} />
           </button>
         )}
@@ -162,7 +165,7 @@ export default function CharacterEdit() {
             <span className="note-body">Kartu ini sepertinya bukan berbahasa Indonesia.</span>
             <button
               className="link-btn"
-              disabled={!!busy}
+              disabled={!!busy || photoBusy}
               onClick={() => {
                 setOfferTranslate(false);
                 void runAi('Menerjemahkan…', async () => {
@@ -191,47 +194,26 @@ export default function CharacterEdit() {
         )}
 
         <div className="rp-edit-top">
-          <button className="rp-avatar-btn" aria-label="Ganti foto" onClick={() => fileRef.current?.click()}>
-            <Avatar blob={c.avatar} name={c.name || '?'} size={84} />
-            <span className="rp-avatar-cam">
-              <IconImage size={16} />
-            </span>
-          </button>
+          <AvatarPicker
+            value={{ avatar: c.avatar, photo: c.photo, crop: c.crop }}
+            name={c.name}
+            size={84}
+            onBusy={setPhotoBusy}
+            onChange={(v) => update({ avatar: v.avatar, photo: v.photo ?? null, crop: v.crop ?? null })}
+          />
           <div className="field rp-name">
             <span>Nama*</span>
             <input className="input" value={c.name} placeholder="Nama karakter" onChange={(e) => update({ name: e.target.value })} />
           </div>
         </div>
-        {c.avatar && (
-          <button className="link-btn" onClick={() => update({ avatar: null })}>
-            Hapus foto
-          </button>
-        )}
-        <input
-          ref={fileRef}
-          type="file"
-          hidden
-          accept="image/*"
-          onChange={async (e) => {
-            const f = e.target.files?.[0];
-            e.target.value = '';
-            if (!f) return;
-            try {
-              update({ avatar: await makeAvatar(f) });
-            } catch {
-              toast('Gagal membaca gambar.');
-            }
-          }}
-        />
-
         <div className="row-buttons left">
-          <button className="btn btn-small" disabled={!!busy} onClick={() => setAiOpen(true)}>
+          <button className="btn btn-small" disabled={!!busy || photoBusy} onClick={() => setAiOpen(true)}>
             <IconSparkle size={14} /> Buat dengan AI
           </button>
           {saved.current && (
             <button
               className="btn btn-small"
-              disabled={!!busy}
+              disabled={!!busy || photoBusy}
               onClick={() =>
                 void runAi('Menerjemahkan…', async () => {
                   update(await translateCard(c.id, c));
@@ -303,6 +285,36 @@ export default function CharacterEdit() {
               />
             </div>
             {field('creatorNotes', 'Catatan pembuat', 'Tidak dikirim ke AI.', 3, false)}
+            <div className="field">
+              <span>Model bawaan karakter</span>
+              <select
+                className="input"
+                value={c.modelRef ? `${c.modelRef.provider}::${c.modelRef.model}` : ''}
+                onChange={(e) => {
+                  const [provider, model] = e.target.value.split('::');
+                  update({ modelRef: e.target.value ? { provider, model } : null });
+                }}
+              >
+                <option value="">Ikuti pengaturan</option>
+                {usable.map((u) => (
+                  <option key={`${u.provider.id}::${u.model.id}`} value={`${u.provider.id}::${u.model.id}`}>
+                    {u.provider.name} · {u.model.label}
+                  </option>
+                ))}
+              </select>
+              <small>Dipakai di chat baru dengan karakter ini, sampai Anda memilih model lain di chat.</small>
+            </div>
+            <div className="field">
+              <span>Kreativitas</span>
+              <select className="input" value={c.creativity ?? ''} onChange={(e) => update({ creativity: (e.target.value || null) as Character['creativity'] })}>
+                <option value="">Ikuti pengaturan</option>
+                {(['stable', 'normal', 'wild'] as const).map((k) => (
+                  <option key={k} value={k}>
+                    {CREATIVITY_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="field">
               <span>Persona yang diikat</span>
               <select className="input" value={c.personaId ?? ''} onChange={(e) => update({ personaId: e.target.value || null })}>

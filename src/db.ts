@@ -29,6 +29,22 @@ export interface Page {
 export type ChatKind = 'free' | 'main' | 'discuss' | 'roleplay';
 export type RpLength = 'short' | 'normal' | 'long';
 
+/** Gaya cerita per chat roleplay (Versi 3.1). */
+export interface RpStyle {
+  pov: 'third' | 'second' | 'first';
+  role: 'actor' | 'narrator';
+  pace: 'slow' | 'medium' | 'fast';
+  register: 'baku' | 'santai' | 'gaul';
+}
+
+/** Potongan avatar dari foto asli, dalam pecahan lebar/tinggi foto (0–1). */
+export interface PhotoCrop {
+  x: number;
+  y: number;
+  /** sisi persegi, pecahan dari sisi terpendek foto */
+  size: number;
+}
+
 export interface Chat {
   id: string;
   title: string;
@@ -59,6 +75,9 @@ export interface Chat {
   rpLength?: RpLength;
   /** batas konteks roleplay (token) untuk ringkasan otomatis; 0 = ikuti batas model; kosong = bawaan 32 ribu */
   rpContext?: number;
+  rpStyle?: RpStyle;
+  /** chat ini cabang dari chat lain */
+  branchOf?: { chatId: string; title: string; seq: number };
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -126,6 +145,8 @@ export interface Message {
   lore?: string[];
   /** roleplay: balasan dipotong karena AI mulai menulis giliran pihak lain */
   guardCut?: boolean;
+  /** roleplay: pesan disematkan */
+  pinned?: boolean;
   createdAt: number;
 }
 
@@ -144,7 +165,7 @@ export interface UsageLog {
   id: string;
   /** id cerita; untuk roleplay: id chat roleplay atau id karakter */
   rootId: string;
-  kind: 'notes' | 'summary' | 'rewrite' | 'rp-persona' | 'rp-memory' | 'rp-summary' | 'rp-card' | 'rp-polish';
+  kind: 'notes' | 'summary' | 'rewrite' | 'rp-persona' | 'rp-memory' | 'rp-summary' | 'rp-card' | 'rp-polish' | 'rp-suggest' | 'rp-story';
   label: string;
   costUsd: number;
   costUnknown: boolean;
@@ -158,6 +179,13 @@ export interface Character {
   id: string;
   name: string;
   avatar: Blob | null;
+  /** foto asli (sisi terpanjang maks. 1600 px) untuk dilihat utuh; avatar dipotong dari sini */
+  photo?: Blob | null;
+  crop?: PhotoCrop | null;
+  /** model bawaan karakter (kosong = ikuti pengaturan) */
+  modelRef?: { provider: string; model: string } | null;
+  /** kreativitas khusus karakter (kosong = ikuti pengaturan) */
+  creativity?: 'stable' | 'normal' | 'wild' | null;
   description: string;
   personality: string;
   scenario: string;
@@ -185,6 +213,8 @@ export interface Persona {
   id: string;
   name: string;
   avatar: Blob | null;
+  photo?: Blob | null;
+  crop?: PhotoCrop | null;
   description: string;
   isDefault: boolean;
   createdAt: number;

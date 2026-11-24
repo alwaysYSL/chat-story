@@ -2,7 +2,7 @@
 
 Aplikasi Android (PWA dan APK) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, TokenKoding, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan. Mulai Versi 3 ada modul **Roleplay** (bagian 14).
 
-Status: Versi 1, 2, dan 3.0 (Roleplay) selesai. **Versi 3.1 dan 3.2: rancangan, menunggu persetujuan.**
+Status: Versi 1, 2, 3.0, dan 3.1 selesai. **Versi 3.2 (group chat): garis besar, dibahas sebelum dikerjakan.**
 
 ---
 
@@ -310,7 +310,7 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 |---|---|---|
 | 1 | Tab Roleplay, karakter (tulis sendiri, buat dengan AI, impor kartu PNG/JSON), persona, chat roleplay dengan versi balasan, edit/hapus pesan, Bantu persona, memori chat, ringkasan pesan lama, lorebook, pengingat aturan, ekspor kartu, backup | 3.0.0 ✓ |
 | 2 | Perbaikan: persona terhapus, ringkasan per blok, chat panjang, batas konteks roleplay, riwayat biaya karakter, kata kunci kedua lorebook, pengaman balasan, kotak teks di sheet | 3.0.1 ✓ |
-| 3 | Foto avatar (lihat, perbesar, crop saat unggah), model & kreativitas per karakter, lihat yang dikirim ke AI, saran balasan, cabang chat, sematkan & cari pesan, jadikan cerita, gaya cerita per chat (bagian 14.12) | 3.1.0 |
+| 3 | Foto avatar (lihat, perbesar, crop saat unggah), model & kreativitas per karakter, lihat yang dikirim ke AI, saran balasan, cabang chat, sematkan & cari pesan, jadikan cerita, gaya cerita per chat (bagian 14.12) | 3.1.0 ✓ |
 | 4 | Group chat: beberapa karakter dalam satu chat (bagian 14.13) | 3.2.0 |
 
 **Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat. Untuk Roleplay: galeri/berbagi karakter publik, script lorebook, suara (TTS).
@@ -519,7 +519,8 @@ user      : pesan Anda terbaru
 - Setiap bagian bisa dibuka untuk melihat teks lengkap. Tombol **Salin semua**.
 
 #### d. Saran balasan
-- Tombol **✦ Bantu** → **Saran balasan**: AI memberi **3 pilihan** giliran singkat untuk persona (1–3 kalimat, gaya berbeda: mis. tenang, berani, bercanda), tampil sebagai kartu di atas kolom ketik.
+- Tombol **✦ Bantu** membuka pilihan: **Tulis giliranku** (Bantu persona; kalau kolom ketik berisi teks: Kembangkan jadi giliran utuh), **Saran balasan**, dan **Perhalus pesanku** (kalau kolom ketik berisi teks).
+- **Saran balasan**: AI memberi **3 pilihan** giliran singkat untuk persona (1–3 kalimat, gaya berbeda: mis. tenang, berani, bercanda), tampil sebagai kartu di atas kolom ketik.
 - Ketuk satu → masuk ke kolom ketik untuk diedit. **↻** meminta 3 saran baru. ✕ menutup.
 - Memakai konteks yang sama dengan Bantu persona; satu permintaan untuk 3 saran. Biaya dicatat di riwayat biaya chat.
 
@@ -540,7 +541,7 @@ user      : pesan Anda terbaru
   - **Rentang:** seluruh chat, mulai dari pesan tersemat tertentu, atau N pesan terakhir.
   - **Tujuan:** cerita baru (judul usulan dari judul chat), atau bab baru di cerita yang sudah ada.
   - **Panjang:** ringkas (±40% dari panjang chat) / seimbang / lengkap (mendekati panjang chat).
-- Proses: transkrip dibagi per ±30 pesan; setiap bagian ditulis ulang AI menjadi prosa orang ketiga berbahasa Indonesia (dialog dipertahankan, aksi dirapikan, sudut pandang konsisten), dengan ringkasan bagian sebelumnya sebagai sambungan. Tulisan mengalir ke page; bagian baru menjadi bab baru kalau melewati batas saran bab (5.000 kata). Bisa dihentikan; bagian yang sudah jadi tetap tersimpan.
+- Proses: transkrip dibagi per ±30 pesan; setiap bagian ditulis ulang AI menjadi prosa orang ketiga berbahasa Indonesia (dialog dipertahankan, aksi dirapikan, sudut pandang konsisten), dengan akhir naskah bagian sebelumnya (±1.500 karakter) sebagai sambungan. Selama proses, page tujuan dikunci (bar "Menjadikan cerita · bagian n/m" dengan Stop). Tulisan mengalir ke page; bagian baru menjadi bab baru kalau melewati batas saran bab (5.000 kata). Bisa dihentikan; bagian yang sudah jadi tetap tersimpan.
 - Cerita baru otomatis mendapat chat utama dengan **brief** yang disusun dari kartu karakter, persona, skenario, dan memori chat (bisa diedit), sehingga Ask AI bisa langsung melanjutkan ceritanya. Tulisan hasil konversi dianggap tulisan penulis (tidak diganti saat Coba lagi).
 - Perkiraan biaya ditampilkan sebelum mulai.
 
