@@ -7,7 +7,8 @@ import { costUsd, isPeak } from '../pricing';
 import { estimateTokens, findModel, type ModelRef } from '../providers';
 import { getSettings, markChanged, temperatureFor } from '../settings';
 import { countWords, uid } from '../util';
-import { historyOf, loadWorld, macro, messageText, names, type RpWorld } from './context';
+import { castName, historyOf, loadWorld, macro, messageText, names, transcript, type RpWorld } from './context';
+import { fillMacros } from './cards';
 
 /** Jadikan cerita: transkrip roleplay ditulis ulang per bagian menjadi prosa di modul cerita. */
 
@@ -53,16 +54,18 @@ export function chunksOf(msgs: Message[]): Message[][] {
 }
 
 function transcriptOf(w: RpWorld, msgs: Message[]): string {
-  const n = names(w);
-  return msgs.map((m) => `${m.role === 'user' ? n.user : n.char}: ${macro(w, messageText(m))}`).join('\n\n');
+  return transcript(w, msgs);
 }
 
 function contextBlock(w: RpWorld): string {
   const n = names(w);
+  const user = n.user;
   const parts = [
-    `[Tokoh utama] ${n.char}: ${macro(w, w.character.description.trim()).slice(0, 800)}`,
-    w.persona && `[Tokoh] ${n.user}: ${macro(w, w.persona.description.trim() || '(tanpa deskripsi)').slice(0, 500)}`,
-    w.character.scenario.trim() && `[Latar] ${macro(w, w.character.scenario.trim()).slice(0, 500)}`,
+    ...w.members.map((c, i) => `[${i === 0 && !w.group ? 'Tokoh utama' : 'Tokoh'}] ${c.name}: ${fillMacros(c.description.trim(), c.name, user).slice(0, w.group ? 500 : 800)}`),
+    w.persona && `[Tokoh] ${user}: ${macro(w, w.persona.description.trim() || '(tanpa deskripsi)').slice(0, 500)}`,
+    w.group && w.chat.groupScenario?.trim()
+      ? `[Latar] ${fillMacros(w.chat.groupScenario.trim(), castName(w), user).slice(0, 500)}`
+      : w.character.scenario.trim() && `[Latar] ${macro(w, w.character.scenario.trim()).slice(0, 500)}`,
   ];
   return parts.filter(Boolean).join('\n');
 }
@@ -93,9 +96,10 @@ export async function estimateStory(chatId: string, o: Pick<StoryOptions, 'range
 /** Brief cerita baru dari kartu, persona, skenario, dan memori chat. */
 export function briefFrom(w: RpWorld): string {
   const n = names(w);
+  const chars = w.members.map((c) => `- ${c.name}: ${fillMacros(c.description.trim(), c.name, n.user) || '(lihat naskah)'}`).join('\n');
   return [
-    `Gambaran besar: cerita dari roleplay bersama ${n.char}.`,
-    `Karakter:\n- ${n.char}: ${macro(w, w.character.description.trim()) || '(lihat naskah)'}${w.persona ? `\n- ${n.user}: ${macro(w, w.persona.description.trim()) || '(lihat naskah)'}` : ''}`,
+    `Gambaran besar: cerita dari roleplay bersama ${w.group ? castName(w) : n.char}.`,
+    `Karakter:\n${chars}${w.persona ? `\n- ${n.user}: ${macro(w, w.persona.description.trim()) || '(lihat naskah)'}` : ''}`,
     w.character.scenario.trim() && `Latar: ${macro(w, w.character.scenario.trim())}`,
     w.chat.memory?.trim() && `Keadaan terakhir:\n${macro(w, w.chat.memory.trim())}`,
     'Aturan lanjutan: narasi orang ketiga, bahasa Indonesia, dialog dalam tanda kutip, lanjutkan langsung dari akhir naskah.',

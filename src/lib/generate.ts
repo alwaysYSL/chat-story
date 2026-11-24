@@ -90,6 +90,11 @@ export async function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Modul roleplay: tahan kunci di antara balasan berantai (group chat), supaya tidak ada permintaan lain yang menyela. */
+export function holdBusy(on: boolean) {
+  starting = on;
+}
+
 export function stopGeneration() {
   controller?.abort();
 }
