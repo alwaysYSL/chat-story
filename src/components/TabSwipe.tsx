@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { useLocation, useNavigate, type Location, type NavigateFunction } from 'react-router-dom';
 
 /**
@@ -10,25 +10,22 @@ import { useLocation, useNavigate, type Location, type NavigateFunction } from '
  */
 export type Tab = 'settings' | 'home' | 'chats';
 
-const ORDER: Tab[] = ['settings', 'home', 'chats'];
+export const TAB_ORDER: Tab[] = ['settings', 'home', 'chats'];
 const PATH: Record<Tab, string> = { settings: '/settings', home: '/', chats: '/chats' };
 
 interface TabState {
   tabFromHome?: boolean;
 }
 
-/** Arah animasi untuk layar berikutnya. */
-let enterFrom: 'left' | 'right' | null = null;
-
-export function takeEnter(): 'left' | 'right' | null {
-  const e = enterFrom;
-  enterFrom = null;
-  return e;
+export function tabOf(pathname: string): Tab | null {
+  if (pathname === '/' || pathname === '') return 'home';
+  if (pathname === '/chats') return 'chats';
+  if (pathname === '/settings') return 'settings';
+  return null;
 }
 
 export function goTab(nav: NavigateFunction, loc: Location, from: Tab, to: Tab) {
   if (from === to) return;
-  enterFrom = ORDER.indexOf(to) > ORDER.indexOf(from) ? 'right' : 'left';
   const st = (loc.state as TabState | null) ?? {};
   if (to === 'home') {
     if (st.tabFromHome) nav(-1);
@@ -41,7 +38,10 @@ export function goTab(nav: NavigateFunction, loc: Location, from: Tab, to: Tab) 
 }
 
 const EDGE = 24; // tepi layar dipakai gestur back Android
-const LOCK = 10; // jarak sebelum arah gerak ditentukan
+const SLOP = 8; // jarak sebelum arah gerak ditentukan (touch slop Android)
+const FLING_MIN_DX = 40; // geseran cepat minimal sejauh ini
+const FLING_VELOCITY = 0.3; // px/ms (±300 dp/detik)
+const EASE = 'cubic-bezier(0.2, 0.9, 0.25, 1)'; // melambat di akhir, seperti ViewPager
 
 function blocksSwipe(target: EventTarget | null, root: HTMLElement): boolean {
   let el = target as HTMLElement | null;
@@ -55,99 +55,208 @@ function blocksSwipe(target: EventTarget | null, root: HTMLElement): boolean {
 }
 
 /**
- * Pasang gestur geser di layar tab. Mengembalikan ref untuk elemen akar layar.
- * Jari ke kiri = tab di kanan, jari ke kanan = tab di kiri. Tidak aktif kalau mulai di tepi layar,
- * di kolom isian, atau di area yang bisa digulir ke samping (mis. kartu Terbaru).
+ * Wadah geser seperti ViewPager Android: ketiga layar dipasang berdampingan dan tetap terpasang,
+ * jadi layar sebelah ikut terlihat dan bergerak bersama jari, tanpa layar kosong saat berpindah.
+ * Pindah lewat tombol atau back juga dianimasikan dengan cara yang sama.
  */
-export function useTabSwipe(tab: Tab) {
-  const ref = useRef<HTMLDivElement>(null);
-  const nav = useNavigate();
+export function TabPager({ panes }: { panes: Record<Tab, ReactNode> }) {
   const loc = useLocation();
-  const navRef = useRef({ nav, loc });
-  navRef.current = { nav, loc };
+  const nav = useNavigate();
+  const tab = tabOf(loc.pathname) ?? 'home';
+  const idx = TAB_ORDER.indexOf(tab);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const live = useRef({ nav, loc, idx, tab });
+  live.current = { nav, loc, idx, tab };
+  const mounted = useRef(false);
+  /** durasi animasi berikutnya (diisi saat jari dilepas, supaya kecepatannya menyambung geseran) */
+  const settleTimer = useRef(0);
+  /** tab yang sudah dituju animasi geser (rute menyusul sesaat kemudian) */
+  const sliding = useRef<number | null>(null);
 
-  // Animasi masuk saat datang dari tab lain.
-  useEffect(() => {
-    const el = ref.current;
-    const dir = takeEnter();
-    if (!el || !dir) return;
-    el.classList.add(dir === 'right' ? 'tab-enter-right' : 'tab-enter-left');
-    const done = () => el.classList.remove('tab-enter-right', 'tab-enter-left');
-    el.addEventListener('animationend', done, { once: true });
-    return () => el.removeEventListener('animationend', done);
-  }, []);
+  /** Layar sebelah hanya digambar saat sedang digeser atau dianimasikan (selain itu disembunyikan, hemat tenaga). */
+  const moving = (on: boolean, after = 0) => {
+    const root = rootRef.current;
+    if (!root) return;
+    window.clearTimeout(settleTimer.current);
+    if (on) root.classList.add('moving');
+    else if (after) settleTimer.current = window.setTimeout(() => root.classList.remove('moving'), after);
+    else root.classList.remove('moving');
+  };
+  const movingRef = useRef(moving);
+  movingRef.current = moving;
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const idx = ORDER.indexOf(tab);
-    let start: { x: number; y: number; t: number } | null = null;
+  // Posisi strip mengikuti tab aktif. Pertama kali dipasang: langsung, tanpa animasi.
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    if (sliding.current === idx) {
+      // Sudah meluncur ke sini sejak jari dilepas.
+      sliding.current = null;
+      return;
+    }
+    sliding.current = null;
+    const dur = mounted.current ? 280 : 0;
+    mounted.current = true;
+    if (dur) {
+      movingRef.current(true);
+      movingRef.current(false, dur + 60);
+    }
+    strip.style.transition = dur ? `transform ${dur}ms ${EASE}` : 'none';
+    strip.style.transform = `translate3d(${-idx * 100}%, 0, 0)`;
+  }, [idx]);
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const strip = stripRef.current;
+    if (!root || !strip) return;
+    let start: { x: number; y: number } | null = null;
     let mode: 'none' | 'h' | 'v' = 'none';
     let dx = 0;
+    let samples: { t: number; x: number }[] = [];
+    /** posisi layar saat disentuh di tengah animasi (relatif ke posisi tab aktif) */
+    let grab = 0;
+    const curIdx = () => sliding.current ?? live.current.idx;
 
-    const reset = (animate: boolean) => {
-      el.style.transition = animate ? 'transform 0.2s ease, opacity 0.2s ease' : '';
-      el.style.transform = '';
-      el.style.opacity = '';
-      if (animate) setTimeout(() => (el.style.transition = ''), 220);
+    const place = (offset: number, dur = 0) => {
+      strip.style.transition = dur ? `transform ${dur}ms ${EASE}` : 'none';
+      strip.style.transform = `translate3d(calc(${-curIdx() * 100}% + ${offset}px), 0, 0)`;
     };
 
     const onStart = (e: TouchEvent) => {
+      start = null;
       if (e.touches.length !== 1) return;
       const t = e.touches[0];
-      const w = window.innerWidth;
-      if (t.clientX < EDGE || t.clientX > w - EDGE || blocksSwipe(e.target, el)) {
+      if (t.clientX < EDGE || t.clientX > window.innerWidth - EDGE || blocksSwipe(e.target, root)) return;
+      start = { x: t.clientX, y: t.clientY };
+      mode = 'none';
+      dx = 0;
+      // Disentuh saat masih meluncur: tahan di posisinya sekarang (seperti ViewPager), lalu lanjut dari situ.
+      grab = 0;
+      if (root.classList.contains('moving')) {
+        const x = new DOMMatrixReadOnly(getComputedStyle(strip).transform).m41;
+        grab = Math.round(x + curIdx() * root.clientWidth);
+        if (Math.abs(grab) > 1) place(grab);
+        else grab = 0;
+      }
+      samples = [{ t: e.timeStamp, x: t.clientX }];
+      movingRef.current(true);
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!start) return;
+      if (e.touches.length !== 1) {
+        // Jari kedua: batalkan geseran.
+        if (mode === 'h') place(0, 200);
+        movingRef.current(false, mode === 'h' ? 260 : 0);
         start = null;
         return;
       }
-      start = { x: t.clientX, y: t.clientY, t: performance.now() };
-      mode = 'none';
-      dx = 0;
-    };
-    const onMove = (e: TouchEvent) => {
-      if (!start || e.touches.length !== 1) return;
       const t = e.touches[0];
       const mx = t.clientX - start.x;
       const my = t.clientY - start.y;
       if (mode === 'none') {
-        if (Math.abs(mx) < LOCK && Math.abs(my) < LOCK) return;
-        mode = Math.abs(mx) > Math.abs(my) * 1.3 ? 'h' : 'v';
+        if (Math.abs(mx) < SLOP && Math.abs(my) < SLOP) return;
+        mode = Math.abs(mx) > Math.abs(my) * 1.2 ? 'h' : 'v';
+        if (mode === 'v') {
+          if (grab) {
+            // Ternyata menggulir: selesaikan perpindahan yang tadi ditahan.
+            place(0, 220);
+            movingRef.current(false, 280);
+            grab = 0;
+          } else movingRef.current(false);
+        }
+        if (mode === 'h') start = { x: t.clientX, y: t.clientY }; // mulai dari titik ini, supaya tidak melompat
       }
       if (mode !== 'h') return;
-      const hasTarget = mx < 0 ? idx < ORDER.length - 1 : idx > 0;
-      dx = hasTarget ? mx : mx * 0.2; // tidak ada tab di arah itu: tahan seperti karet
-      el.style.transition = '';
-      el.style.transform = `translateX(${dx}px)`;
-      el.style.opacity = String(1 - Math.min(0.35, Math.abs(dx) / window.innerWidth));
+      const i = curIdx();
+      const raw = t.clientX - start.x + grab;
+      // Di ujung (tidak ada layar di arah itu) layar tidak ikut bergeser.
+      const w = root.clientWidth;
+      dx = Math.max(i === TAB_ORDER.length - 1 ? 0 : -w, Math.min(i === 0 ? 0 : w, raw));
+      samples.push({ t: e.timeStamp, x: t.clientX });
+      if (samples.length > 6) samples.shift();
+      place(dx);
     };
-    const onEnd = () => {
+    const onEnd = (e: TouchEvent) => {
       if (!start) return;
-      const elapsed = performance.now() - start.t;
       const wasH = mode === 'h';
       start = null;
       mode = 'none';
-      if (!wasH) return;
-      const fast = Math.abs(dx) > 40 && Math.abs(dx) / Math.max(elapsed, 1) > 0.5;
-      const far = Math.abs(dx) > window.innerWidth * 0.25;
-      const next = dx < 0 ? ORDER[idx + 1] : ORDER[idx - 1];
-      if ((fast || far) && next) {
-        reset(false);
-        const { nav: n, loc: l } = navRef.current;
-        goTab(n, l, tab, next);
-      } else reset(true);
+      if (!wasH) {
+        if (grab) {
+          place(0, 220);
+          movingRef.current(false, 280);
+        } else movingRef.current(false);
+        return;
+      }
+      const w = root.clientWidth;
+      // Kecepatan saat dilepas (±100 ms terakhir), bukan rata-rata seluruh geseran.
+      // Jari berhenti sebelum dilepas = kecepatan 0.
+      const recent = samples.filter((s) => e.timeStamp - s.t <= 100);
+      let v = 0;
+      if (recent.length >= 2) {
+        const first = recent[0];
+        const last = recent[recent.length - 1];
+        const dt = last.t - first.t;
+        v = dt > 0 ? (last.x - first.x) / dt : Math.sign(last.x - first.x) * 10;
+      }
+      const { nav: n, loc: l } = live.current;
+      const i = curIdx();
+      const cur = TAB_ORDER[i];
+      const dir = dx < 0 ? 1 : -1;
+      const next = TAB_ORDER[i + dir];
+      const fling = Math.abs(dx) >= FLING_MIN_DX && Math.abs(v) >= FLING_VELOCITY && Math.sign(v) === Math.sign(dx);
+      const go = !!next && dx !== 0 && (fling || Math.abs(dx) > w / 2);
+      const remaining = go ? w - Math.abs(dx) : Math.abs(dx);
+      const speed = Math.max(Math.abs(v), 1.2);
+      const dur = Math.round(Math.min(320, Math.max(150, remaining / speed + 80)));
+      if (go) {
+        // Animasi langsung dimulai (berjalan di compositor), rute diganti setelah animasi mulai,
+        // supaya render React tidak menahan frame pertama.
+        const to = i + dir;
+        sliding.current = to;
+        strip.style.transition = `transform ${dur}ms ${EASE}`;
+        strip.style.transform = `translate3d(${-to * 100}%, 0, 0)`;
+        movingRef.current(true);
+        movingRef.current(false, dur + 60);
+        requestAnimationFrame(() => requestAnimationFrame(() => goTab(n, l, cur, next)));
+        // Pengaman: kalau rute ternyata tidak berubah, kembalikan layar ke tempatnya.
+        window.setTimeout(() => {
+          if (live.current.idx === i) {
+            sliding.current = null;
+            place(0, 200);
+            movingRef.current(false, 260);
+          }
+        }, dur + 500);
+      } else {
+        place(0, dur);
+        movingRef.current(false, dur + 60);
+      }
     };
 
-    el.addEventListener('touchstart', onStart, { passive: true });
-    el.addEventListener('touchmove', onMove, { passive: true });
-    el.addEventListener('touchend', onEnd);
-    el.addEventListener('touchcancel', onEnd);
+    // Pasif supaya gulir vertikal tidak menunggu JavaScript. touch-action: pan-y membuat browser tidak ikut
+    // menggulir kalau gerakan pertama mendatar, jadi layar tidak bergerak dua arah sekaligus.
+    root.addEventListener('touchstart', onStart, { passive: true });
+    root.addEventListener('touchmove', onMove, { passive: true });
+    root.addEventListener('touchend', onEnd);
+    root.addEventListener('touchcancel', onEnd);
     return () => {
-      el.removeEventListener('touchstart', onStart);
-      el.removeEventListener('touchmove', onMove);
-      el.removeEventListener('touchend', onEnd);
-      el.removeEventListener('touchcancel', onEnd);
+      root.removeEventListener('touchstart', onStart);
+      root.removeEventListener('touchmove', onMove);
+      root.removeEventListener('touchend', onEnd);
+      root.removeEventListener('touchcancel', onEnd);
     };
-  }, [tab]);
+  }, []);
 
-  return ref;
+  return (
+    <div className="pager" ref={rootRef}>
+      <div className="pager-strip" ref={stripRef}>
+        {TAB_ORDER.map((t, i) => (
+          <div key={t} className="pager-pane" data-tab={t} inert={i !== idx} aria-hidden={i !== idx}>
+            {panes[t]}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

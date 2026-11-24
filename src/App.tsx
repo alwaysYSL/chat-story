@@ -9,6 +9,7 @@ import { UpdateBanner } from './components/UpdateBanner';
 import { recoverInterrupted } from './lib/generate';
 import { purgeTrash } from './lib/pages';
 import { useSettings } from './lib/settings';
+import { TabPager } from './components/TabSwipe';
 import Home from './screens/Home';
 import Chats from './screens/Chats';
 import ChatScreen from './screens/ChatScreen';
@@ -83,6 +84,9 @@ function ReadingVars() {
   return null;
 }
 
+/** Beranda, Chat, dan Pengaturan dalam satu wadah geser yang tetap terpasang saat berpindah tab. */
+const TABS = <TabPager panes={{ settings: <SettingsScreen />, home: <Home />, chats: <Chats /> }} />;
+
 export default function App() {
   return (
     <HashRouter>
@@ -90,12 +94,12 @@ export default function App() {
       <ReadingVars />
       <Gate>
         <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/chats" element={<Chats />} />
+          <Route path="/" element={TABS} />
+          <Route path="/chats" element={TABS} />
           <Route path="/chat/:id" element={<ChatRoute />} />
           <Route path="/page/:id" element={<PageRoute />} />
           <Route path="/search" element={<Search />} />
-          <Route path="/settings" element={<SettingsScreen />} />
+          <Route path="/settings" element={TABS} />
           <Route path="/trash" element={<Trash />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="*" element={<Navigate to="/" replace />} />

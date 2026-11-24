@@ -50,6 +50,9 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* Seperti aplikasi: dokumen tidak pernah ikut tergulir atau ditarik; yang bergulir hanya daftar di dalam layar. */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 body {
   background: var(--bg);
@@ -101,7 +104,9 @@ svg {
 }
 .scroll-area {
   flex: 1;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   padding-bottom: 96px;
 }
@@ -1880,34 +1885,42 @@ body:has(.chat-screen) .toast {
   display: none;
 }
 
-/* ---------- Geser antar layar utama ---------- */
-.tab-screen {
+/* ---------- Geser antar layar utama (seperti ViewPager) ---------- */
+.pager {
+  height: 100dvh;
+  /* clip (bukan hidden): tidak bisa digulir ke samping, juga oleh scrollIntoView */
+  overflow: clip;
   touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.pager input,
+.pager textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.pager-strip {
+  display: flex;
+  height: 100%;
   will-change: transform;
 }
-.tab-screen .scroll-area {
-  touch-action: pan-y;
+.pager-pane {
+  flex: 0 0 100%;
+  min-width: 0;
+  height: 100%;
+  overflow: clip;
+  contain: layout paint;
+}
+.pager-pane[inert] {
+  visibility: hidden;
+}
+.pager.moving .pager-pane {
+  visibility: visible;
 }
 .recents {
   touch-action: pan-x pan-y;
-}
-.tab-enter-right {
-  animation: tab-in-right 0.22s ease-out;
-}
-.tab-enter-left {
-  animation: tab-in-left 0.22s ease-out;
-}
-@keyframes tab-in-right {
-  from {
-    transform: translateX(28%);
-    opacity: 0.4;
-  }
-}
-@keyframes tab-in-left {
-  from {
-    transform: translateX(-28%);
-    opacity: 0.4;
-  }
+  overscroll-behavior-x: contain;
 }
 .avatar.active {
   outline: 2px solid var(--accent);
