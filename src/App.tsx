@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { maybeAutoBackup } from './lib/autobackup';
 import { flushEditors } from './lib/editors';
 import { runMigrations } from './lib/migrations';
 import { exitApp, installBackButton, installExternalLinkHandler } from './lib/native';
@@ -23,10 +24,11 @@ function Startup() {
       await runMigrations();
       await recoverInterrupted();
       await purgeTrash();
+      await maybeAutoBackup();
     })();
     // Simpan tulisan yang belum tersimpan saat aplikasi disembunyikan (Android bisa menutupnya kapan saja).
     const onVis = () => {
-      if (document.visibilityState === 'hidden') void flushEditors();
+      if (document.visibilityState === 'hidden') void flushEditors().then(() => maybeAutoBackup());
     };
     const onHide = () => void flushEditors();
     document.addEventListener('visibilitychange', onVis);

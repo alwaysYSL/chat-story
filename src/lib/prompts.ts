@@ -135,3 +135,7 @@ export function afterTextBlock(text: string): string {
   const t = text.length > MAX_AFTER_CHARS ? text.slice(0, MAX_AFTER_CHARS).trimEnd() + ' …' : text;
   return `[Teks yang sudah ditulis penulis SESUDAH bagian yang kamu tulis sekarang. Jangan menulis ulang atau mengulang teks ini, tetapi buat tulisanmu nyambung dan mengarah ke teks ini.]\n${t}`;
 }
+
+export function notesBlock(text: string): string {
+  return `[Catatan cerita dari penulis: fakta yang harus tetap konsisten]\n${text}`;
+}

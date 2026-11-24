@@ -2,7 +2,10 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { db, type Page } from '../db';
+import type { Editor as TEditor } from '@tiptap/react';
 import { StoryEditor, type StreamInfo } from '../components/Editor';
+import { FindBar } from '../components/FindBar';
+import { NotesSheet, SummariesSheet } from '../components/StoryTools';
 import {
   IconArrowBottom,
   IconArrowTop,
@@ -10,8 +13,11 @@ import {
   IconChat,
   IconDown,
   IconHistory,
+  IconList,
   IconMore,
+  IconNotes,
   IconPage,
+  IconSearch,
   IconSettings,
   IconShare,
   IconSparkle,
@@ -63,6 +69,10 @@ export default function PageView() {
   const [briefText, setBriefText] = useState('');
   const [costOpen, setCostOpen] = useState(false);
   const [orderOpen, setOrderOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState<null | { from?: string }>(null);
+  const [summariesOpen, setSummariesOpen] = useState(false);
+  const [editor, setEditor] = useState<TEditor | null>(null);
   const [title, setTitle] = useState('');
   const titleFocused = useRef(false);
   const titleRef = useRef<HTMLTextAreaElement | null>(null);
@@ -219,6 +229,9 @@ export default function PageView() {
             </Link>
           )}
         </div>
+        <button className="icon-btn" aria-label="Cari & ganti" onClick={() => setFindOpen((v) => !v)}>
+          <IconSearch />
+        </button>
         <button className="icon-btn" aria-label="Ekspor" onClick={() => setExportOpen(true)}>
           <IconShare />
         </button>
@@ -226,6 +239,8 @@ export default function PageView() {
           <IconMore />
         </button>
       </header>
+
+      {findOpen && rootId && <FindBar key={page.id} editor={editor} rootId={rootId} pageId={page.id} onClose={() => setFindOpen(false)} />}
 
       <div
         className="scroll-area page-scroll"
@@ -288,6 +303,7 @@ export default function PageView() {
             stream={stream}
             onFocusChange={setEditing}
             onReady={onEditorReady}
+            onEditor={setEditor}
           />
 
           <div className="page-foot">
@@ -346,7 +362,7 @@ export default function PageView() {
         <div className="gen-bar">
           <IconSparkle size={16} />
           <span className="gen-text">
-            {gen.thinking && !gen.live ? 'AI sedang berpikir…' : `AI sedang menulis · ${formatNumber(gen.words)} kata`}
+            {gen.status ?? (gen.thinking && !gen.live ? 'AI sedang berpikir…' : `AI sedang menulis · ${formatNumber(gen.words)} kata`)}
           </span>
           <button className="btn btn-small" onClick={() => nav(`/chat/${gen.chatId}`, { state: askState })}>
             <IconChat size={16} /> Chat
@@ -356,7 +372,7 @@ export default function PageView() {
           </button>
         </div>
       ) : (
-        !editing && <BottomBar askHref={askHref} askState={askState} />
+        !editing && !findOpen && <BottomBar askHref={askHref} askState={askState} />
       )}
 
       <PageMenu
@@ -373,6 +389,35 @@ export default function PageView() {
               onClick={() => {
                 setMenuOpen(false);
                 void openBrief();
+              }}
+            />
+            <SheetItem
+              icon={<IconNotes />}
+              label="Catatan cerita"
+              hint="Fakta yang harus konsisten, selalu dibaca AI"
+              onClick={() => {
+                setMenuOpen(false);
+                setNotesOpen({});
+              }}
+            />
+            {!empty && mainChat && (
+              <SheetItem
+                icon={<IconSparkle />}
+                label="Perbarui catatan dari bab ini"
+                hint="AI mengusulkan, Anda yang memutuskan"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setNotesOpen({ from: page.id });
+                }}
+              />
+            )}
+            <SheetItem
+              icon={<IconList />}
+              label="Ringkasan bab lama"
+              hint="Untuk cerita yang mendekati batas konteks model"
+              onClick={() => {
+                setMenuOpen(false);
+                setSummariesOpen(true);
               }}
             />
             <SheetItem
@@ -434,6 +479,8 @@ export default function PageView() {
           toast('Brief disimpan');
         }}
       />
+      {rootId && <NotesSheet rootId={rootId} open={!!notesOpen} fromPageId={notesOpen?.from} onClose={() => setNotesOpen(null)} />}
+      {rootId && <SummariesSheet rootId={rootId} open={summariesOpen} onClose={() => setSummariesOpen(false)} />}
       {rootId && <CostSheet open={costOpen} onClose={() => setCostOpen(false)} rootId={rootId} rate={settings.usdToIdr} />}
       <Sheet open={orderOpen} onClose={() => setOrderOpen(false)} title="Urutan bab">
         <p className="note">Urutan ini juga dipakai AI saat membaca cerita.</p>
@@ -472,6 +519,10 @@ function CostSheet({ open, onClose, rootId, rate }: { open: boolean; onClose: ()
         const v = m.versions[m.active];
         rows.push({ id: m.id, label: (c.kind === 'discuss' ? 'Diskusi: ' : '') + label, cost: m.costUsd, words: v?.words ?? 0, at: m.createdAt });
       });
+    }
+    for (const u of await db.usage.where('rootId').equals(rootId).toArray()) {
+      if (u.costUsd === 0 && !u.costUnknown) continue;
+      rows.push({ id: u.id, label: u.label, cost: u.costUsd, words: 0, at: u.at });
     }
     rows.sort((a, b) => b.at - a.at);
     return rows;

@@ -1,4 +1,4 @@
-import { db, SCHEMA_VERSION, type Attachment, type Chat, type Message, type Page } from '../db';
+import { db, SCHEMA_VERSION, type Attachment, type Chat, type Message, type Page, type UsageLog } from '../db';
 import { getSettings, markChanged, updateSettings, type Settings } from './settings';
 import { mergeProviderLists } from './providers';
 import { blobToDataUrl, dataUrlToBlob } from './util';
@@ -11,6 +11,8 @@ interface BackupFile {
   chats: Chat[];
   messages: Message[];
   attachments: (Omit<Attachment, 'blob'> & { blob: string | null })[];
+  /** Versi 2.1.0: biaya catatan/ringkasan/tulis ulang (tidak ada di backup lama) */
+  usage?: UsageLog[];
   settings: Partial<Settings>;
 }
 
@@ -19,18 +21,20 @@ export interface DataSet {
   chats: Chat[];
   messages: Message[];
   attachments: Attachment[];
+  usage: UsageLog[];
   settings: Settings;
 }
 
 export async function readAllData(): Promise<DataSet> {
-  const [pages, chats, messages, attachments, settings] = await Promise.all([
+  const [pages, chats, messages, attachments, usage, settings] = await Promise.all([
     db.pages.toArray(),
     db.chats.toArray(),
     db.messages.toArray(),
     db.attachments.toArray(),
+    db.usage.toArray(),
     getSettings(),
   ]);
-  return { pages, chats, messages, attachments, settings };
+  return { pages, chats, messages, attachments, usage, settings };
 }
 
 /**
@@ -48,6 +52,7 @@ export async function dataToBackupBlob(d: DataSet, exportedAt = Date.now()): Pro
     `"pages":${JSON.stringify(d.pages)},`,
     `"chats":${JSON.stringify(d.chats)},`,
     `"messages":${JSON.stringify(d.messages)},`,
+    `"usage":${JSON.stringify(d.usage ?? [])},`,
     '"attachments":[',
   ];
   for (let i = 0; i < d.attachments.length; i++) {
@@ -100,6 +105,7 @@ export async function readBackupFile(file: File): Promise<BackupFile> {
   data.chats = Array.isArray(data.chats) ? data.chats : [];
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   data.attachments = Array.isArray(data.attachments) ? data.attachments : [];
+  data.usage = Array.isArray(data.usage) ? data.usage : [];
   data.settings = data.settings && typeof data.settings === 'object' ? data.settings : {};
   return data;
 }
@@ -123,9 +129,11 @@ export async function restoreBackup(file: File, mode: 'merge' | 'replace'): Prom
   const chats = data.chats.map(freshTrash);
   let keptNewer = 0;
 
-  await db.transaction('rw', [db.pages, db.chats, db.messages, db.attachments, db.kv], async () => {
+  const usage = data.usage ?? [];
+  await db.transaction('rw', [db.pages, db.chats, db.messages, db.attachments, db.usage, db.kv], async () => {
     if (mode === 'replace') {
-      await Promise.all([db.pages.clear(), db.chats.clear(), db.messages.clear(), db.attachments.clear()]);
+      await Promise.all([db.pages.clear(), db.chats.clear(), db.messages.clear(), db.attachments.clear(), db.usage.clear()]);
+      await db.usage.bulkPut(usage);
       await db.pages.bulkPut(pages);
       await db.chats.bulkPut(chats);
       await db.messages.bulkPut(data.messages);
@@ -176,6 +184,8 @@ export async function restoreBackup(file: File, mode: 'merge' | 'replace'): Prom
     await db.chats.bulkPut(chatsToPut);
     await db.messages.bulkPut(msgsToPut);
     await db.attachments.bulkPut(attsToPut);
+    const localUsage = new Set((await db.usage.toCollection().primaryKeys()) as string[]);
+    await db.usage.bulkPut(usage.filter((u) => !localUsage.has(u.id)));
   });
   markChanged();
   return { pages: data.pages.length, chats: data.chats.length, keptNewer };

@@ -60,8 +60,8 @@ export default function Home() {
     settings &&
     lastChange !== undefined &&
     (pages?.length ?? 0) > 0 &&
-    lastChange > settings.lastBackupAt &&
-    Date.now() - Math.max(settings.lastBackupAt, firstUse(pages)) > BACKUP_DAYS * 86400_000;
+    lastChange > Math.max(settings.lastBackupAt, settings.lastAutoBackupAt) &&
+    Date.now() - Math.max(settings.lastBackupAt, settings.lastAutoBackupAt, firstUse(pages)) > BACKUP_DAYS * 86400_000;
 
   const visibleRoots = showAll ? roots : roots.slice(0, PAGE_SIZE);
 

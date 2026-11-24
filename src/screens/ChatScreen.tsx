@@ -27,6 +27,7 @@ import {
   IconTrash,
 } from '../components/Icons';
 import { ModelPicker } from '../components/Providers';
+import { NotesSheet } from '../components/StoryTools';
 import { PromptSheet, Sheet, SheetItem, toast, useLongPress } from '../components/ui';
 import {
   cancelMessage,
@@ -39,7 +40,7 @@ import {
   UserError,
   type PendingAttachment,
 } from '../lib/generate';
-import { compressImage, IMAGE_TYPES, MAX_TEXT_BYTES, TEXT_EXT } from '../lib/images';
+import { compressImage, IMAGE_TYPES, MAX_PDF_BYTES, MAX_TEXT_BYTES, TEXT_EXT } from '../lib/images';
 import { findBrief } from '../lib/context';
 import { ownedText, versionBody } from '../lib/markdown';
 import { goBack, setJump, setRedirect, type NavState } from '../lib/nav';
@@ -108,6 +109,7 @@ export default function ChatScreen() {
   const [editMsg, setEditMsg] = useState<Message | null>(null);
   const [editBrief, setEditBrief] = useState<Message | null>(null);
   const [editReminder, setEditReminder] = useState(false);
+  const [notesOpen, setNotesOpen] = useState<null | { from?: string }>(null);
   const [selectText, setSelectText] = useState<string | null>(null);
   const [briefOpen, setBriefOpen] = useState(false);
   const [showCanceled, setShowCanceled] = useState(false);
@@ -248,7 +250,25 @@ export default function ChatScreen() {
     const out: PendingAttachment[] = [];
     for (const f of Array.from(files)) {
       try {
-        if (IMAGE_TYPES.includes(f.type)) {
+        if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
+          if (f.size > MAX_PDF_BYTES) {
+            toast(`${f.name} terlalu besar (maks. 30 MB).`);
+            continue;
+          }
+          toast(`Membaca ${f.name}…`);
+          const { pdfToText } = await import('../lib/pdf');
+          const r = await pdfToText(f);
+          if (!r.text.trim()) {
+            toast(`${f.name}: tidak ada teks yang bisa dibaca (kemungkinan hasil scan). Salin teksnya ke file .txt, atau lampirkan halamannya sebagai foto.`);
+            continue;
+          }
+          if (r.text.length > MAX_TEXT_BYTES) {
+            toast(`${f.name}: teksnya terlalu panjang (${formatNumber(Math.round(r.text.length / 1000))} ribu karakter, maks. 500 ribu).`);
+            continue;
+          }
+          out.push({ kind: 'text', name: f.name, mime: 'text/plain', blob: null, text: r.text });
+          toast(`${f.name}: ${formatNumber(r.pages)} halaman, ${formatNumber(r.text.length)} karakter teks`);
+        } else if (IMAGE_TYPES.includes(f.type)) {
           const { blob } = await compressImage(f);
           out.push({ kind: 'image', name: f.name, mime: 'image/jpeg', blob, text: null, previewUrl: URL.createObjectURL(blob) });
         } else if (TEXT_EXT.test(f.name) || f.type.startsWith('text/')) {
@@ -258,7 +278,7 @@ export default function ChatScreen() {
           }
           out.push({ kind: 'text', name: f.name, mime: f.type || 'text/plain', blob: null, text: await f.text() });
         } else {
-          toast(`${f.name}: format tidak didukung. Gunakan gambar (JPG, PNG, WebP, GIF) atau file .txt/.md.`);
+          toast(`${f.name}: format tidak didukung. Gunakan gambar (JPG, PNG, WebP, GIF), PDF, atau file .txt/.md.`);
         }
       } catch {
         toast(`Gagal membaca ${f.name}.`);
@@ -395,6 +415,36 @@ export default function ChatScreen() {
     );
   }
 
+  // Bab sebelumnya selesai (sudah ada bab sesudahnya): tawarkan memperbarui catatan cerita dari bab itu.
+  const prevPage = storyPages && storyPages.length >= 2 ? storyPages[storyPages.length - 2] : undefined;
+  if (
+    !note &&
+    kind === 'main' &&
+    chat &&
+    writeOn &&
+    !isOpening &&
+    prevPage &&
+    prevPage.text.trim() &&
+    chat.notesPromptFor !== prevPage.id &&
+    (chat.notesAt ?? 0) < prevPage.updatedAt
+  ) {
+    const dismiss = () => void db.chats.update(chat.id, { notesPromptFor: prevPage.id });
+    note = (
+      <Note onClose={dismiss}>
+        <span>{displayTitle(prevPage)} selesai. Perbarui catatan cerita dari bab itu?</span>
+        <button
+          className="link-btn"
+          onClick={() => {
+            dismiss();
+            setNotesOpen({ from: prevPage.id });
+          }}
+        >
+          Perbarui
+        </button>
+      </Note>
+    );
+  }
+
   const modeLabel = !canWrite
     ? null
     : !writeOn
@@ -459,6 +509,8 @@ export default function ChatScreen() {
             onToggle={() => setBriefOpen((v) => !v)}
             onMenu={() => setMenu({ m: brief, pair: list[list.indexOf(brief) + 1] })}
             onEditReminder={() => setEditReminder(true)}
+            notes={chat?.notes ?? ''}
+            onEditNotes={() => setNotesOpen({})}
           />
         )}
 
@@ -532,6 +584,7 @@ export default function ChatScreen() {
               streaming={!!streaming}
               live={streaming ? gen!.words : 0}
               thinking={!!streaming && gen!.thinking && !gen!.live}
+              status={streaming ? gen!.status : undefined}
               rate={settings.usdToIdr}
               onOpen={() => m.targetPageId && goToPage(m.targetPageId, m.versions.length ? m.id : undefined)}
               onMenu={() => setMenu({ m, pair: r.user })}
@@ -663,7 +716,7 @@ export default function ChatScreen() {
           type="file"
           hidden
           multiple
-          accept=".txt,.md,text/plain,text/markdown"
+          accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
           onChange={(e) => {
             void pickFiles(e.target.files);
             e.target.value = '';
@@ -685,8 +738,8 @@ export default function ChatScreen() {
         />
         <SheetItem
           icon={<IconFile />}
-          label="File teks"
-          hint=".txt atau .md"
+          label="File teks / PDF"
+          hint=".txt, .md, atau PDF (teksnya diambil; PDF hasil scan belum bisa)"
           onClick={() => {
             setPlusOpen(false);
             fileRef.current?.click();
@@ -776,6 +829,10 @@ export default function ChatScreen() {
         }}
       />
 
+      {kind === 'main' && rootId && (
+        <NotesSheet rootId={rootId} open={!!notesOpen} fromPageId={notesOpen?.from} onClose={() => setNotesOpen(null)} />
+      )}
+
       <ReminderSheet
         open={editReminder}
         onClose={() => setEditReminder(false)}
@@ -861,6 +918,8 @@ function BriefPin({
   onToggle,
   onMenu,
   onEditReminder,
+  notes,
+  onEditNotes,
 }: {
   m: Message;
   reminder: { text: string; auto: boolean };
@@ -868,6 +927,8 @@ function BriefPin({
   onToggle: () => void;
   onMenu: () => void;
   onEditReminder: () => void;
+  notes: string;
+  onEditNotes: () => void;
 }) {
   const lp = useLongPress(onMenu);
   return (
@@ -891,6 +952,18 @@ function BriefPin({
             </div>
             <div className={'reminder-text' + (reminder.text ? '' : ' muted')}>
               {reminder.text || 'Belum ada. Pengingat dikirim di akhir setiap permintaan menulis supaya AI tetap patuh pada aturan Anda.'}
+            </div>
+          </div>
+          <div className="reminder-box">
+            <div className="reminder-head">
+              <span>Catatan cerita</span>
+              <button className="link-btn" onClick={onEditNotes}>
+                {notes.trim() ? 'Edit' : 'Tambah'}
+              </button>
+            </div>
+            <div className={'reminder-text' + (notes.trim() ? '' : ' muted')}>
+              {notes.trim() ||
+                'Belum ada. Fakta yang harus konsisten (karakter, hubungan, status terkini). Dikirim ke AI di setiap permintaan menulis.'}
             </div>
           </div>
         </div>
@@ -1017,6 +1090,7 @@ function WriteCard({
   streaming,
   live,
   thinking,
+  status: prepStatus,
   rate,
   onOpen,
   onMenu,
@@ -1027,6 +1101,7 @@ function WriteCard({
   streaming: boolean;
   live: number;
   thinking: boolean;
+  status?: string;
   rate: number;
   onOpen: () => void;
   onMenu: () => void;
@@ -1037,7 +1112,9 @@ function WriteCard({
   const v = m.versions[m.active];
   const status = streaming ? 'streaming' : m.status;
   const meta = streaming
-    ? thinking
+    ? prepStatus
+      ? prepStatus
+      : thinking
       ? 'AI sedang berpikir…'
       : `${formatNumber(live)} kata…`
     : [

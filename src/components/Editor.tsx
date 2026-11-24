@@ -1,15 +1,18 @@
 import { EditorContent, Extension, useEditor, type Editor as TEditor } from '@tiptap/react';
 import { Fragment, Slice, type Node as PMNode } from '@tiptap/pm/model';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, type EditorState } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import { useEffect, useRef, useState } from 'react';
 import type { Page } from '../db';
 import { registerFlush } from '../lib/editors';
-import { blocksToHtml, parseMarkdown } from '../lib/markdown';
-import { savePageDoc } from '../lib/pages';
+import { findPlugin } from '../lib/find';
+import { blocksToHtml, parseMarkdown, serializeBlocks, type Block } from '../lib/markdown';
+import { rootIdOf, savePageDoc } from '../lib/pages';
 import { debounce } from '../lib/util';
-import { IconCheck, IconRedo, IconUndo } from './Icons';
+import { IconCheck, IconRedo, IconSparkle, IconUndo, IconUser } from './Icons';
+import { RewriteSheet, type RewriteTarget } from './StoryTools';
+import { toast } from './ui';
 
 /** Meta transaksi untuk perubahan dari luar editor (AI menulis, ganti versi, batalkan). */
 const EXTERNAL = 'chatStoryExternal';
@@ -74,6 +77,13 @@ const SegAttr = Extension.create({
   },
 });
 
+const FindHighlight = Extension.create({
+  name: 'findHighlight',
+  addProseMirrorPlugins() {
+    return [findPlugin()];
+  },
+});
+
 export interface StreamInfo {
   seg: string;
   text: string;
@@ -131,12 +141,14 @@ export function StoryEditor({
   stream,
   onFocusChange,
   onReady,
+  onEditor,
 }: {
   page: Page;
   editable: boolean;
   stream: StreamInfo | null;
   onFocusChange: (focused: boolean) => void;
   onReady?: () => void;
+  onEditor?: (editor: TEditor | null) => void;
 }) {
   const pageId = page.id;
   const extRev = useRef(page.extRev);
@@ -167,6 +179,7 @@ export function StoryEditor({
       }),
       SegAttr,
       StreamWidget,
+      FindHighlight,
     ],
     content: page.doc,
     editable,
@@ -218,15 +231,70 @@ export function StoryEditor({
     editor.view.dispatch(editor.state.tr.setMeta(streamKey, stream).setMeta('addToHistory', false).setMeta(EXTERNAL, true));
   }, [editor, stream?.seg, stream?.text, stream?.thinking]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    onEditor?.(editor);
+    return () => onEditor?.(null);
+  }, [editor]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---------- Tulis ulang teks terpilih ---------- */
+  const [rewrite, setRewrite] = useState<(RewriteTarget & { from: number; to: number }) | null>(null);
+  const openRewrite = () => {
+    if (!editor) return;
+    const { from, to, empty } = editor.state.selection;
+    if (empty) return;
+    const doc = editor.state.doc;
+    // includeParents: isi slice selalu berupa blok (juga kalau pilihan di dalam satu paragraf).
+    const md = (a: number, b: number) => serializeBlocks((doc.slice(a, b, true).content.toJSON() ?? []) as Block[]);
+    const selected = md(from, to);
+    if (!selected.trim()) return;
+    setRewrite({ rootId: rootIdOf(page), before: md(0, from), selected, after: md(to, doc.content.size), from, to });
+  };
+  const applyRewrite = (result: string) => {
+    if (!editor || !rewrite) return;
+    if (!editor.isEditable) {
+      toast('Naskah sedang ditulis AI. Coba lagi setelah selesai.');
+      return;
+    }
+    const blocks = parseMarkdown(result, null);
+    if (!blocks.length) return;
+    const { from, to } = rewrite;
+    const nodes = blocks.map((b) => editor.schema.nodeFromJSON(b));
+    // Slice terbuka: paragraf pertama hasil menyambung teks sebelum pilihan, paragraf terakhir menyambung teks sesudahnya
+    // (seperti mengganti teks biasa). Paragraf di sekitarnya tetap dengan pemiliknya.
+    const slice = new Slice(Fragment.fromArray(nodes), nodes[0].isTextblock ? 1 : 0, nodes[nodes.length - 1].isTextblock ? 1 : 0);
+    editor
+      .chain()
+      .focus()
+      .command(({ tr }) => {
+        tr.replace(from, to, slice);
+        return true;
+      })
+      .run();
+    setRewrite(null);
+    toast('Teks diganti. Ketuk Undo untuk mengembalikan.');
+  };
+
   return (
     <>
       <EditorContent editor={editor} />
-      <FormatBar editor={editor} />
+      <FormatBar editor={editor} onRewrite={openRewrite} />
+      {rewrite && <RewriteSheet target={rewrite} onClose={() => setRewrite(null)} onReplace={applyRewrite} />}
     </>
   );
 }
 
-function FormatBar({ editor }: { editor: TEditor | null }) {
+/** Posisi blok tulisan AI yang tersentuh pilihan (atau blok tempat kursor). */
+function aiBlocksInSelection(state: EditorState): number[] {
+  const { from, to } = state.selection;
+  const out: number[] = [];
+  state.doc.nodesBetween(from, to, (node, pos) => {
+    if (node.attrs.seg) out.push(pos);
+    return false;
+  });
+  return out;
+}
+
+function FormatBar({ editor, onRewrite }: { editor: TEditor | null; onRewrite: () => void }) {
   const [, setTick] = useState(0);
   const [focused, setFocused] = useState(false);
   useEffect(() => {
@@ -257,6 +325,21 @@ function FormatBar({ editor }: { editor: TEditor | null }) {
     </button>
   );
   const chain = () => editor.chain().focus();
+  const hasSelection = !editor.state.selection.empty;
+  const aiBlocks = editor.isEditable ? aiBlocksInSelection(editor.state) : [];
+  const markMine = () => {
+    const tr = editor.state.tr;
+    for (const pos of aiBlocks) {
+      const node = tr.doc.nodeAt(pos);
+      if (node) tr.setNodeMarkup(pos, undefined, { ...node.attrs, seg: null });
+    }
+    editor.view.dispatch(tr);
+    toast(
+      aiBlocks.length > 1
+        ? `${aiBlocks.length} paragraf ditandai tulisan Anda. AI tidak akan menggantinya saat Coba lagi.`
+        : 'Paragraf ditandai tulisan Anda. AI tidak akan menggantinya saat Coba lagi.',
+    );
+  };
   return (
     <div className="format-bar" onMouseDown={(e) => e.preventDefault()}>
       {btn(<b>H</b>, editor.isActive('heading'), () => chain().toggleHeading({ level: 2 }).run(), 'Judul bab')}
@@ -265,6 +348,8 @@ function FormatBar({ editor }: { editor: TEditor | null }) {
       {btn('***', false, () => chain().setHorizontalRule().run(), 'Pemisah adegan')}
       {btn(<IconUndo size={18} />, false, () => chain().undo().run(), 'Undo')}
       {btn(<IconRedo size={18} />, false, () => chain().redo().run(), 'Redo')}
+      {hasSelection && editor.isEditable && btn(<IconSparkle size={18} />, false, onRewrite, 'Tulis ulang dengan AI')}
+      {aiBlocks.length > 0 && btn(<IconUser size={18} />, false, markMine, 'Tandai tulisan saya')}
       <span className="fmt-spacer" />
       {btn(<IconCheck size={18} />, false, () => editor.commands.blur(), 'Selesai')}
     </div>

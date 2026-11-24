@@ -10,8 +10,9 @@ import { updateSettings } from './settings';
  * 1 = Versi 1 awal (satu API key DeepSeek)
  * 2 = daftar penyedia AI tersimpan, model bawaan ditandai
  * 3 = Versi 2.0.0: TokenKoding bawaan (penyedia TokenKoding buatan sendiri diubah jadi bawaan), biaya minimum
+ * 4 = Versi 2.1.0: catatan cerita, ringkasan bab, catatan biaya di luar chat
  */
-export const DATA_VERSION = 3;
+export const DATA_VERSION = 4;
 
 const VERSION_KEY = 'dataVersion';
 const SNAPSHOT_KEY = 'snapshot:pre-update';
