@@ -8,7 +8,7 @@ import { Sheet, SheetItem, Toggle, toast } from '../../components/ui';
 import { goBack } from '../../lib/nav';
 import { estimateTokens } from '../../lib/providers';
 import { generateCard, improveField, translateCard } from '../../lib/rp/assist';
-import { makeAvatar } from '../../lib/rp/cards';
+import { depthPrompt, makeAvatar, withDepthPrompt } from '../../lib/rp/cards';
 import { emptyCharacter, ensureOwnLorebook, listPersonas, ownLorebook, saveCharacter } from '../../lib/rp/data';
 import { FIELD_ACTIONS } from '../../lib/rp/prompts';
 import { UserError } from '../../lib/generate';
@@ -287,6 +287,21 @@ export default function CharacterEdit() {
           <>
             {field('systemPrompt', 'Instruksi sistem khusus', 'Kosongkan untuk memakai instruksi roleplay bawaan (bahasa Indonesia, orang ketiga).', 4, false)}
             {field('postHistory', 'Pengingat aturan karakter', 'Dikirim di akhir setiap permintaan, mis. "{{char}} selalu menjawab singkat."', 3, false)}
+            <div className="field rp-field">
+              <span>Catatan karakter (depth prompt)</span>
+              <textarea
+                className="input"
+                rows={3}
+                value={depthPrompt(c)}
+                placeholder="Dari kartu SillyTavern. Dikirim di akhir setiap permintaan, bersama pengingat aturan."
+                onChange={(e) => setC((x) => {
+                  if (!x) return x;
+                  const n = withDepthPrompt(x, e.target.value);
+                  save(n);
+                  return n;
+                })}
+              />
+            </div>
             {field('creatorNotes', 'Catatan pembuat', 'Tidak dikirim ke AI.', 3, false)}
             <div className="field">
               <span>Persona yang diikat</span>

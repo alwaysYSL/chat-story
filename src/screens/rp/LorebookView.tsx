@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { db, type LoreEntry, type Lorebook } from '../../db';
+import { db, type LoreEntry, type LoreLogic, type Lorebook } from '../../db';
 import { IconBack, IconBook, IconChevron, IconMore, IconPlus, IconTrash } from '../../components/Icons';
 import { ConfirmSheet, PromptSheet, Sheet, SheetItem, Toggle, toast } from '../../components/ui';
 import { goBack } from '../../lib/nav';
@@ -132,7 +132,8 @@ export default function LorebookView() {
               {e.title || '(tanpa judul)'}
             </b>
             <small>
-              {e.constant ? 'Selalu dikirim' : e.keys.join(', ') || 'belum ada kata kunci'} · ±{estimateTokens(e.content.length)} token{e.enabled ? '' : ' · nonaktif'}
+              {e.constant ? 'Selalu dikirim' : e.keys.join(', ') || 'belum ada kata kunci'}
+              {e.secondaryKeys?.length ? ` + ${e.secondaryKeys.join(', ')}` : ''} · ±{estimateTokens(e.content.length)} token{e.enabled ? '' : ' · nonaktif'}
             </small>
           </button>
         ))}
@@ -189,9 +190,11 @@ function EntryEditor({
 }) {
   const [e, setE] = useState(entry);
   const [keys, setKeys] = useState(entry.keys.join(', '));
+  const [sec, setSec] = useState((entry.secondaryKeys ?? []).join(', '));
   useEffect(() => {
     setE(entry);
     setKeys(entry.keys.join(', '));
+    setSec((entry.secondaryKeys ?? []).join(', '));
   }, [entry]);
   return (
     <Sheet open onClose={onClose} title={isNew ? 'Entri baru' : 'Edit entri'}>
@@ -203,7 +206,23 @@ function EntryEditor({
         <div className="field">
           <span>Kata kunci</span>
           <input className="input" value={keys} placeholder="dipisah koma, mis. kafe senja, senja, kafe" onChange={(x) => setKeys(x.target.value)} />
-          <small>Huruf besar/kecil tidak dibedakan, kata utuh. Pola regex: /pola/</small>
+          <small>Kata utuh. Pola regex: /pola/</small>
+        </div>
+        <div className="field">
+          <span>Kata kunci kedua (opsional)</span>
+          <input className="input" value={sec} placeholder="dipisah koma, mis. malam, hujan" onChange={(x) => setSec(x.target.value)} />
+          {sec.trim() && (
+            <select className="input" value={e.logic ?? 'and_any'} onChange={(x) => setE({ ...e, logic: x.target.value as LoreLogic })}>
+              <option value="and_any">Dan salah satu kata kunci kedua muncul</option>
+              <option value="and_all">Dan semua kata kunci kedua muncul</option>
+              <option value="not_any">Dan tidak ada kata kunci kedua yang muncul</option>
+              <option value="not_all">Dan tidak semua kata kunci kedua muncul</option>
+            </select>
+          )}
+        </div>
+        <div className="field-row">
+          <span>Bedakan huruf besar/kecil</span>
+          <Toggle checked={!!e.caseSensitive} onChange={(v) => setE({ ...e, caseSensitive: v })} label="Bedakan huruf besar/kecil" />
         </div>
         <div className="field">
           <span>Isi</span>
@@ -253,7 +272,8 @@ function EntryEditor({
               toast('Isi kata kunci, atau nyalakan "Selalu dikirim".');
               return;
             }
-            onSave({ ...e, keys: k, title: e.title.trim() || k[0] || 'Entri' });
+            const k2 = sec.split(',').map((x) => x.trim()).filter(Boolean);
+            onSave({ ...e, keys: k, secondaryKeys: k2.length ? k2 : undefined, logic: k2.length ? (e.logic ?? 'and_any') : undefined, title: e.title.trim() || k[0] || 'Entri' });
             onClose();
           }}
         >

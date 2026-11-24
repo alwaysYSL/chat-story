@@ -1,7 +1,9 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { Persona } from '../../db';
+import { db, type Persona } from '../../db';
+import { useSettings } from '../../lib/settings';
+import { formatRupiah } from '../../lib/util';
 import { IconBack, IconImage, IconPlus, IconSparkle } from '../../components/Icons';
 import { Avatar } from '../../components/rp/Avatar';
 import { ConfirmSheet, Sheet, Toggle, toast } from '../../components/ui';
@@ -14,6 +16,8 @@ export default function Personas() {
   const nav = useNavigate();
   const list = useLiveQuery(listPersonas, []);
   const [edit, setEdit] = useState<Persona | null>(null);
+  const settings = useSettings();
+  const aiCost = useLiveQuery(async () => (await db.usage.where('rootId').equals('persona').toArray()).reduce((n, u) => n + u.costUsd, 0), []);
   return (
     <div className="screen">
       <header className="page-header">
@@ -48,6 +52,7 @@ export default function Personas() {
             </li>
           ))}
         </ul>
+        {!!aiCost && settings && <p className="note pad">Biaya bantuan AI untuk persona: {formatRupiah(aiCost * settings.usdToIdr)}</p>}
       </div>
       {edit && <PersonaEditor initial={edit} onClose={() => setEdit(null)} />}
     </div>

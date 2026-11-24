@@ -81,6 +81,11 @@ textarea {
   font: inherit;
   color: inherit;
 }
+/* Kotak teks hanya boleh ditarik ke bawah (bawaan browser: ke segala arah, bisa melewati layar). */
+textarea {
+  resize: vertical;
+  max-width: 100%;
+}
 .rot90 {
   transform: rotate(90deg);
 }
@@ -1030,6 +1035,7 @@ section {
   width: 100%;
   max-width: 760px;
   max-height: 85dvh;
+  overflow-x: hidden;
   background: var(--surface);
   border-radius: 18px 18px 0 0;
   padding: 8px 0 calc(env(safe-area-inset-bottom) + 12px);
@@ -1052,7 +1058,9 @@ section {
   text-overflow: ellipsis;
 }
 .sheet-body {
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0 8px;
 }
 .sheet-body > .input,
@@ -1064,6 +1072,11 @@ section {
 .sheet-body > .icon-grid {
   margin-left: 12px;
   margin-right: 12px;
+}
+/* width 100% + margin 12px membuat kolom isian keluar 24px dari sheet (dan isi sheet bisa digeser ke samping). */
+.sheet-body > .input,
+.sheet-body > textarea {
+  width: calc(100% - 24px);
 }
 .sheet-item {
   display: flex;

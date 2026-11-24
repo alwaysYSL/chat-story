@@ -416,14 +416,16 @@ Kolom (label Indonesia, nama kolom kartu dalam kurung):
 - **Kolom ketik:** teks · chip model · tombol **✦ Bantu persona** · tombol kirim.
   - **Bantu persona** (*impersonate*): AI menulis giliran Anda sebagai persona, sesuai alur terakhir. Kalau kolom ketik berisi arahan singkat (mis. "aku menolak dengan halus lalu pergi"), AI mengembangkannya. Hasil masuk ke **kolom ketik** untuk diedit, tidak langsung dikirim. Coba lagi dengan mengetuk tombolnya lagi.
   - Kalau kolom ketik berisi teks, tombol **✦ Bantu** membuka pilihan: Kembangkan jadi giliran utuh, atau **Perhalus pesanku**. Perhalus juga ada di menu tahan pesan Anda yang paling akhir. Hasil ditampilkan dulu (Ganti / Coba lagi / Batal).
-  - Kolom kosong → tombol kirim menjadi **Lanjutkan**: karakter melanjutkan adegan tanpa giliran Anda.
+  - Kolom kosong → tombol kirim menjadi **Lanjutkan**: karakter melanjutkan adegan tanpa giliran Anda. (Balasan yang terpotong disambung lewat tombol **Sambung balasan** di bawah balasan itu.)
   - Selama AI menulis → tombol **Stop**. Teks yang sudah masuk tetap tersimpan.
 - **Panjang balasan** per chat: Pendek (±100–200 kata) · Normal (±250–400 kata, bawaan) · Panjang (±500–800 kata).
 - Draf, model, dan thinking mengikuti cara chat cerita (draf tersimpan otomatis, model terakhir diingat per chat).
 
 ### 14.7 Memori
 - **Memori chat** (*chat memory*): catatan bebas per chat berisi hubungan, situasi sekarang, fakta yang sudah pasti, dan tujuan yang belum selesai. Bisa diedit dari menu chat. Setiap kira-kira 30 pesan, kolom ketik menawarkan **Perbarui memori**: AI mengusulkan memori baru dari pesan terbaru, Anda Terima atau Batal (mekanisme catatan cerita Versi 2).
-- **Ringkasan pesan lama:** mode Otomatis (bawaan; aktif kalau chat melewati 60% batas konteks model) · Selalu · Mati.
+- **Ringkasan pesan lama:** mode Otomatis (bawaan) · Selalu · Mati.
+  - Otomatis aktif kalau chat melewati **batas konteks roleplay** per chat: 16 / 32 (bawaan) / 64 / 128 ribu token, atau "Model" (60% batas konteks model). Batas model saja tidak cukup, karena model DeepSeek dan TokenKoding berkonteks ±1 juta token sehingga ringkasan hampir tidak pernah aktif dan biaya per giliran terus naik.
+  - Batas blok mengikuti ringkasan yang sudah tersimpan: menghapus satu pesan lama hanya membuat blok pesan itu diringkas ulang. Ringkasan yang pesannya sudah terhapus semua dibuang. Duplikat chat ikut menyalin ringkasannya.
   - Pesan lama diringkas per blok ±30 pesan. Setiap ringkasan dibuat sekali, disimpan (supaya tetap kena cache), dibuat ulang kalau ada pesan di blok itu yang diedit atau dihapus, dan bisa diedit.
   - 30 pesan terakhir selalu dikirim utuh. Pesan pembuka selalu dikirim utuh.
 - **Lorebook:**
@@ -432,6 +434,7 @@ Kolom (label Indonesia, nama kolom kartu dalam kurung):
   - Entri dikirim kalau salah satu kata kuncinya muncul di 4 pesan terakhir atau di pesan yang sedang dikirim (huruf besar/kecil tidak dibedakan, kata utuh). Jangkauan bisa diubah per lorebook.
   - Batas: entri yang cocok dikirim sampai 1.500 token (bisa diubah), urut prioritas. Sisanya dilewati, dengan penanda di info pesan.
   - Info balasan (tahan → Info) menampilkan entri lorebook yang aktif saat balasan itu ditulis.
+  - **Kata kunci kedua** (opsional) dengan syarat: dan salah satu / dan semua / dan tidak ada / dan tidak semua. **Bedakan huruf besar/kecil** per entri. Keduanya dibaca dari dan disimpan ke kartu SillyTavern (`secondary_keys`, `selective`, `selectiveLogic`, `case_sensitive`).
 
 ### 14.8 Susunan pesan
 ```
@@ -451,6 +454,9 @@ user      : pesan Anda terbaru
 ```
 - **Instruksi roleplay bawaan:** memerankan `{{char}}` dan tokoh lain di sekitarnya; bahasa Indonesia; narasi orang ketiga, dialog dalam tanda kutip; **tidak menulis aksi, ucapan, atau pikiran `{{user}}`**; tidak mengulang kalimat dari balasan sebelumnya; tidak keluar dari peran; mengakhiri balasan di titik yang memberi giliran ke `{{user}}`.
 - **Hemat cache:** bagian tetap di depan, riwayat menyambung (*append-only*), bagian yang berubah tiap giliran (lorebook yang cocok, memori, pengingat) hanya ditempel di pesan terakhir dan tidak disimpan. Mengedit kartu, persona, atau pesan lama membuat cache reset dari titik itu, untuk satu permintaan berikutnya.
+- **Pengaman balasan:** label nama di awal balasan ("Rika: …") dibuang. Kalau AI mulai menulis baris yang diawali nama persona ("Dimas: …"), balasan dipotong di situ dan permintaan dihentikan (hemat token); Info balasan menandainya. Bantu persona memakai pengaman yang sama dengan arah sebaliknya.
+- **depth_prompt** kartu SillyTavern (catatan karakter) bisa diedit di Lanjutan dan dikirim di akhir permintaan bersama pengingat aturan, bukan di kedalaman tertentu, supaya riwayat tetap kena cache.
+- **Persona** yang dihapus tidak dipakai lagi: chat lama dan chat baru jatuh ke persona bawaan.
 - **Bantu persona** memakai susunan yang sama, dengan instruksi terakhir "tulis giliran `{{user}}` berikutnya sesuai persona" dan hasilnya tidak disimpan ke riwayat.
 - `{{char}}` dan `{{user}}` diganti nama karakter dan persona saat dikirim. Isi kartu disimpan apa adanya.
 - Temperature mengikuti pengaturan kreativitas (sama dengan cerita). Thinking bawaan mati.
@@ -477,5 +483,6 @@ user      : pesan Anda terbaru
 - Migrasi otomatis ke skema baru, dengan backup sebelum pembaruan seperti biasa.
 
 ### 14.11 Biaya
-- Setiap balasan menampilkan biaya seperti chat cerita. Bantu persona, ringkasan, usulan memori, Buat dengan AI, dan terjemahan dicatat di **riwayat biaya** chat atau karakter.
+- Setiap balasan menampilkan biaya seperti chat cerita. Bantu persona, ringkasan, usulan memori, dan perhalus dicatat di **riwayat biaya** chat. Halaman karakter → Riwayat biaya merangkum total tiap chat ditambah Buat dengan AI, terjemahan, dan ✦ per kolom. Biaya bantuan AI untuk persona tampil di Persona saya.
+- Chat panjang: hanya 120 pesan terakhir yang digambar (tombol **Tampilkan pesan sebelumnya** untuk yang lebih lama), dan baris pesan yang tidak berubah tidak digambar ulang saat mengetik atau saat AI menulis.
 - Chat roleplay biasanya panjang, jadi peringatan batas konteks (85%) dan ringkasan otomatis (60%) sama pentingnya dengan di cerita.

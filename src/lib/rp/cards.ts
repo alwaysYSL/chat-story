@@ -1,4 +1,4 @@
-import type { Character, LoreEntry, Lorebook } from '../../db';
+import type { Character, LoreEntry, LoreLogic, Lorebook } from '../../db';
 import { uid } from '../util';
 
 /**
@@ -148,6 +148,8 @@ function utf8ToB64(text: string): string {
 /* ---------- Kartu ↔ karakter ---------- */
 
 type Json = Record<string, unknown>;
+/** urutan nilai selectiveLogic di SillyTavern */
+const ST_LOGIC: LoreLogic[] = ['and_any', 'not_all', 'not_any', 'and_all'];
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const arr = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []) as string[];
 
@@ -211,8 +213,10 @@ export function parseCardJson(raw: unknown): ImportedCard {
       if (!e || typeof e !== 'object') return;
       const content = str(e.content);
       if (!content.trim()) return;
-      const { keys, content: _c, enabled, constant, name: n, comment, priority, insertion_order, ...rest } = e;
+      const { keys, content: _c, enabled, constant, name: n, comment, priority, insertion_order, secondary_keys, selective, case_sensitive, ...rest } = e;
       void _c;
+      const ext = (e.extensions && typeof e.extensions === 'object' ? e.extensions : {}) as Json;
+      const secondaryKeys = arr(secondary_keys);
       entries.push({
         id: uid(),
         title: str(n) || str(comment) || arr(keys)[0] || `Entri ${i + 1}`,
@@ -221,7 +225,10 @@ export function parseCardJson(raw: unknown): ImportedCard {
         enabled: enabled !== false,
         constant: constant === true,
         priority: typeof priority === 'number' ? priority : typeof insertion_order === 'number' ? insertion_order : 100,
-        extra: rest,
+        // SillyTavern: kata kunci kedua hanya berlaku kalau "selective"; logikanya di extensions.selectiveLogic.
+        ...(selective !== false && secondaryKeys.length ? { secondaryKeys, logic: ST_LOGIC[Number(ext.selectiveLogic) || 0] ?? 'and_any' } : {}),
+        ...(case_sensitive === true || ext.case_sensitive === true ? { caseSensitive: true } : {}),
+        extra: { ...rest, ...(selective === false && secondaryKeys.length ? { secondary_keys: secondaryKeys, selective: false } : {}) },
       });
     });
     const { entries: _e, name: bn, scan_depth, token_budget, ...rest } = book;
@@ -303,7 +310,13 @@ export function toCardV2(c: Character, book: Lorebook | null): Json {
         priority: e.priority,
         insertion_order: e.priority,
         id: i,
-        extensions: (e.extra?.extensions as Json) ?? {},
+        ...(e.secondaryKeys?.length ? { secondary_keys: e.secondaryKeys, selective: true } : {}),
+        ...(e.caseSensitive ? { case_sensitive: true } : {}),
+        extensions: {
+          ...((e.extra?.extensions as Json) ?? {}),
+          ...(e.secondaryKeys?.length ? { selectiveLogic: Math.max(0, ST_LOGIC.indexOf(e.logic ?? 'and_any')) } : {}),
+          ...(e.caseSensitive ? { case_sensitive: true } : {}),
+        },
       })),
     };
   }
@@ -375,4 +388,21 @@ export function initials(name: string): string {
 export function cardFileName(name: string, ext: 'png' | 'json'): string {
   const base = name.trim().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 40) || 'karakter';
   return `${base}.${ext}`;
+}
+
+/* ---------- depth_prompt (catatan karakter SillyTavern) ---------- */
+
+/** Teks `extensions.depth_prompt.prompt` dari kartu. */
+export function depthPrompt(c: Pick<Character, 'extra'>): string {
+  const ext = c.extra?.extensions as Record<string, unknown> | undefined;
+  const dp = ext?.depth_prompt as { prompt?: unknown } | undefined;
+  return typeof dp?.prompt === 'string' ? dp.prompt : '';
+}
+
+export function withDepthPrompt(c: Character, text: string): Character {
+  const ext = { ...((c.extra?.extensions as Record<string, unknown>) ?? {}) };
+  const prev = (ext.depth_prompt as Record<string, unknown>) ?? { depth: 4, role: 'system' };
+  if (text.trim()) ext.depth_prompt = { ...prev, prompt: text };
+  else delete ext.depth_prompt;
+  return { ...c, extra: { ...c.extra, extensions: ext } };
 }
