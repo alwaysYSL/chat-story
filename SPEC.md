@@ -492,11 +492,14 @@ user      : pesan Anda terbaru
 ### 14.12 Versi 3.1
 
 #### a. Foto avatar
-- **Lihat foto:** ketuk avatar karakter atau persona di chat roleplay (di kepala chat, di samping pesan, dan di chip persona), juga avatar besar di halaman karakter. Foto tampil di overlay gelap layar penuh.
-  - **Cubit** untuk memperbesar/memperkecil (1× sampai 5×), **ketuk dua kali** untuk 2,5× di titik itu atau kembali ke 1×.
-  - **Tahan ujung/sudut foto lalu geser** untuk memperbesar/memperkecil dengan satu jari (seperti menarik pegangan ukuran). Ujung foto diberi pegangan kecil.
-  - **Geser** untuk menggerakkan foto. Foto tidak bisa digeser keluar layar: kalau lebih besar dari layar, tepinya berhenti di tepi layar; kalau lebih kecil, tetap di dalam layar.
-  - Tombol kecil **✕** di pojok kanan atas (di atas foto) menutup overlay. Tombol back Android dan ketuk area gelap di luar foto juga menutup. Nama karakter/persona tampil kecil di bawah.
+- **Lihat foto:** ketuk avatar karakter atau persona di chat roleplay (di kepala chat, di samping pesan, dan di chip persona), juga avatar besar di halaman karakter. Foto muncul sebagai **jendela kecil yang melayang** di atas chat, seperti picture-in-picture.
+  - **Latar tidak digelapkan.** Chat di belakangnya tetap terlihat dan tetap bisa digulir dan dibaca. Ketuk di luar jendela tidak menutupnya.
+  - Ukuran awal kira-kira 60% lebar layar, cukup untuk dilihat tanpa menutupi seluruh chat. Posisi awal di tengah agak ke atas.
+  - **Geser jendela** untuk memindahkannya. Jendela tidak bisa keluar layar: tepinya berhenti di tepi layar.
+  - **Cubit** atau **tahan pegangan di sudut jendela lalu geser** untuk memperbesar/memperkecil (dari ±120 px sampai selebar/setinggi layar). Foto ikut membesar bersama jendelanya.
+  - **Ketuk dua kali** untuk bergantian antara ukuran awal dan ukuran besar.
+  - Tombol kecil **✕** di pojok kanan atas jendela menutupnya. Tombol back Android juga menutup. Nama karakter/persona tampil kecil di bawah foto.
+  - Membuka avatar lain mengganti isi jendela, posisi dan ukurannya tetap.
 - **Foto asli disimpan** (sisi terpanjang maks. 1600 px) di samping avatar bulat, supaya overlay menampilkan foto utuh (mis. foto potret dari kartu Chub), bukan hanya potongan persegi. Avatar bulat dibuat dari foto asli sesuai potongan (crop) yang dipilih. Kartu impor PNG: gambar kartu menjadi foto asli.
 - **Unggah foto (karakter dan persona):**
   1. Pilih foto dari galeri.
