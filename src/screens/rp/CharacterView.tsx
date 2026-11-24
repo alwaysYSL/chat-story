@@ -7,8 +7,9 @@ import { Avatar } from '../../components/rp/Avatar';
 import { ConfirmSheet, PromptSheet, Sheet, SheetItem, toast, useLongPress } from '../../components/ui';
 import { goBack } from '../../lib/nav';
 import { fillMacros } from '../../lib/rp/cards';
-import { duplicateCharacter, duplicateRpChat, emptyPersona, ensureOwnLorebook, listPersonas, resolvePersona, saveCharacter, savePersona, trashCharacter } from '../../lib/rp/data';
+import { chatsOfCharacter, duplicateCharacter, duplicateRpChat, emptyPersona, ensureOwnLorebook, listPersonas, resolvePersona, saveCharacter, savePersona, trashCharacter } from '../../lib/rp/data';
 import { startRpChat } from '../../lib/rp/engine';
+import { isGroupChat } from '../../lib/rp/group';
 import { markChanged } from '../../lib/settings';
 import { trashChat } from '../../lib/pages';
 import { formatRupiah, formatUsd, timeAgo } from '../../lib/util';
@@ -20,13 +21,14 @@ export default function CharacterView() {
   const nav = useNavigate();
   const c = useLiveQuery(() => db.characters.get(id), [id]);
   const chats = useLiveQuery(async () => {
-    const list = (await db.chats.where('characterId').equals(id).toArray()).filter((x) => !x.deletedAt).sort((a, b) => b.updatedAt - a.updatedAt);
+    const list = (await chatsOfCharacter(id)).filter((x) => !x.deletedAt).sort((a, b) => b.updatedAt - a.updatedAt);
     const out = [];
     for (const ch of list) {
       const last = await db.messages.where('[chatId+seq]').between([ch.id, -Infinity], [ch.id, Infinity]).last();
       const p = await resolvePersona(ch.personaId);
       const c0 = await db.characters.get(id);
-      out.push({ chat: ch, last: fillMacros(last?.text ?? '', c0?.name ?? '', p?.name || 'Pengguna') });
+      const who = last?.role === 'assistant' && last.speakerName ? last.speakerName : (c0?.name ?? '');
+      out.push({ chat: ch, last: (isGroupChat(ch) && last?.role === 'assistant' ? `${who}: ` : '') + fillMacros(last?.text ?? '', who, p?.name || 'Pengguna') });
     }
     return out;
   }, [id]);
@@ -135,6 +137,7 @@ export default function CharacterView() {
           }}
         />
         <SheetItem icon={<IconPin />} label={c.pinned ? 'Lepas pin' : 'Pin di atas'} onClick={async () => { await saveCharacter({ ...c, pinned: !c.pinned }); setMenuOpen(false); }} />
+        <SheetItem icon={<IconChat />} label="Group chat baru dengan karakter ini" onClick={() => { setMenuOpen(false); nav(`/rp/group/new?with=${c.id}`); }} />
         <SheetItem icon={<IconShare />} label="Ekspor kartu" onClick={() => { setMenuOpen(false); setExportOpen(true); }} />
         <SheetItem icon={<IconHistory />} label="Riwayat biaya" hint="Semua chat dan bantuan AI untuk kartu ini" onClick={() => { setMenuOpen(false); setCostOpen(true); }} />
         <SheetItem
@@ -250,6 +253,7 @@ function ChatRow({ chat, last, onOpen, onMenu }: { chat: Chat; last: string; onO
     <li className="chat-row">
       <button className="chat-main pressable" onClick={onOpen} {...lp}>
         <span className="chat-title">
+          {isGroupChat(chat) ? '👥 ' : ''}
           {chat.branchOf ? '↳ ' : ''}
           {chat.title}
         </span>
@@ -272,11 +276,11 @@ function CharacterCostSheet({ characterId, onClose }: { characterId: string; onC
   const rows = useLiveQuery(async () => {
     const out: { id: string; label: string; cost: number; at: number }[] = [];
     for (const u of await db.usage.where('rootId').equals(characterId).toArray()) if (u.costUsd > 0) out.push({ id: u.id, label: u.label, cost: u.costUsd, at: u.at });
-    for (const ch of await db.chats.where('characterId').equals(characterId).toArray()) {
+    for (const ch of await chatsOfCharacter(characterId)) {
       const msgs = await db.messages.where('chatId').equals(ch.id).toArray();
       const usage = await db.usage.where('rootId').equals(ch.id).toArray();
       const cost = msgs.reduce((n, m) => n + m.costUsd, 0) + usage.reduce((n, u) => n + u.costUsd, 0);
-      if (cost > 0) out.push({ id: ch.id, label: `Chat: ${ch.title}${ch.deletedAt ? ' (di Sampah)' : ''}`, cost, at: ch.updatedAt });
+      if (cost > 0) out.push({ id: ch.id, label: `${isGroupChat(ch) ? 'Grup' : 'Chat'}: ${ch.title}${ch.deletedAt ? ' (di Sampah)' : ''}`, cost, at: ch.updatedAt });
     }
     return out.sort((a, b) => b.at - a.at);
   }, [characterId]);

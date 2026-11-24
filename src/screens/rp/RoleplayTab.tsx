@@ -8,6 +8,8 @@ import { ConfirmSheet, Sheet, SheetItem, toast, useLongPress } from '../../compo
 import { cardFileName, cardJsonBlob, cardPngBlob, fillMacros, readCardFile } from '../../lib/rp/cards';
 import { photoFromFile } from '../../lib/rp/photo';
 import { duplicateCharacter, importCard, ownLorebook, resolvePersona, saveCharacter, trashCharacter } from '../../lib/rp/data';
+import { isGroupChat, memberIdsOf } from '../../lib/rp/group';
+import { StackedAvatars } from './RpGroupTools';
 import { downloadFile, shareFile, timeAgo } from '../../lib/util';
 
 function snippet(t: string): string {
@@ -36,15 +38,18 @@ export default function RoleplayTab() {
     for (const c of chats) {
       const ch = c.characterId ? await db.characters.get(c.characterId) : undefined;
       if (!ch || ch.deletedAt) continue;
+      const members = isGroupChat(c) ? (await db.characters.bulkGet(c.memberIds!)).filter((x): x is Character => !!x && !x.deletedAt) : [ch];
       const last = await db.messages.where('[chatId+seq]').between([c.id, -Infinity], [c.id, Infinity]).last();
       const p = await resolvePersona(c.personaId);
-      out.push({ chat: c, character: ch, last: fillMacros(last?.text ?? '', ch.name, p?.name || 'Pengguna') });
+      const who = last?.speakerId ? (members.find((m) => m.id === last.speakerId)?.name ?? last.speakerName ?? ch.name) : ch.name;
+      out.push({ chat: c, character: ch, members, last: (isGroupChat(c) && last?.role === 'assistant' ? `${who}: ` : '') + fillMacros(last?.text ?? '', who, p?.name || 'Pengguna') });
     }
     return out;
   }, []);
   const counts = useLiveQuery(async () => {
     const m = new Map<string, number>();
-    for (const c of await db.chats.filter((x) => x.kind === 'roleplay' && !x.deletedAt).toArray()) if (c.characterId) m.set(c.characterId, (m.get(c.characterId) ?? 0) + 1);
+    for (const c of await db.chats.filter((x) => x.kind === 'roleplay' && !x.deletedAt).toArray())
+      for (const id of memberIdsOf(c)) m.set(id, (m.get(id) ?? 0) + 1);
     return m;
   }, []);
   const [tag, setTag] = useState<string | null>(null);
@@ -103,12 +108,12 @@ export default function RoleplayTab() {
           <section>
             <div className="section-head static">Lanjutkan</div>
             <div className="recents">
-              {recent!.map(({ chat, character, last }) => (
+              {recent!.map(({ chat, character, members, last }) => (
                 <button key={chat.id} className="recent-card rp-recent" onClick={() => nav(`/rp/chat/${chat.id}`)}>
                   <div className="rp-recent-top">
-                    <Avatar blob={character.avatar} name={character.name} size={36} />
+                    {members.length > 1 ? <StackedAvatars members={members} size={30} /> : <Avatar blob={character.avatar} name={character.name} size={36} />}
                     <span className="rp-recent-name">
-                      <b>{character.name}</b>
+                      <b>{members.length > 1 ? `👥 ${chat.title}` : character.name}</b>
                       <small>{timeAgo(chat.updatedAt)}</small>
                     </span>
                   </div>
@@ -182,6 +187,7 @@ export default function RoleplayTab() {
         <SheetItem icon={<IconPen />} label="Tulis sendiri" hint="Isi kolom kartu karakter" onClick={() => { setNewOpen(false); nav('/rp/c/new/edit'); }} />
         <SheetItem icon={<IconSparkle />} label="Buat dengan AI" hint="Dari ide singkat, lalu Anda periksa" onClick={() => { setNewOpen(false); nav('/rp/c/new/edit?ai=1'); }} />
         <SheetItem icon={<IconImport />} label="Impor kartu" hint="PNG atau JSON (Chub, SillyTavern)" onClick={() => { setNewOpen(false); fileRef.current?.click(); }} />
+        <SheetItem icon={<IconUser />} label="Group chat baru" hint={`Roleplay dengan 2–5 karakter sekaligus`} disabled={(chars?.length ?? 0) < 2} onClick={() => { setNewOpen(false); nav('/rp/group/new'); }} />
       </Sheet>
 
       <Sheet open={!!menu} onClose={() => setMenu(null)} title={menu?.name}>

@@ -24,6 +24,7 @@ import CharacterEdit from './screens/rp/CharacterEdit';
 import Personas from './screens/rp/Personas';
 import LorebookView, { WorldLorebooks } from './screens/rp/LorebookView';
 import RpChat from './screens/rp/RpChat';
+import GroupNew from './screens/rp/GroupNew';
 import { purgeRpTrash } from './lib/rp/data';
 import { PhotoViewer } from './components/rp/PhotoViewer';
 
@@ -120,6 +121,7 @@ export default function App() {
           {/* Tanpa key: karakter baru yang tersimpan pindah ke /rp/c/<id>/edit tanpa memasang ulang editor. */}
           <Route path="/rp/c/:id/edit" element={<CharacterEdit />} />
           <Route path="/rp/chat/:id" element={<RpChatRoute />} />
+          <Route path="/rp/group/new" element={<GroupNew />} />
           <Route path="/rp/personas" element={<Personas />} />
           <Route path="/rp/lore" element={<WorldLorebooks />} />
           <Route path="/rp/lore/:id" element={<LorebookView />} />

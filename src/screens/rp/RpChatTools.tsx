@@ -19,12 +19,12 @@ function errText(e: unknown): string {
 
 /* ---------- Lihat yang dikirim ke AI ---------- */
 
-export function PreviewSheet({ chatId, text, model, onClose }: { chatId: string; text: string; model: ModelRef | null; onClose: () => void }) {
+export function PreviewSheet({ chatId, text, model, forced, onClose }: { chatId: string; text: string; model: ModelRef | null; forced?: string | null; onClose: () => void }) {
   const settings = useSettings();
   const [p, setP] = useState<RequestPreview | null | undefined>(undefined);
   useEffect(() => {
-    void previewRequest(chatId, text, model).then(setP).catch(() => setP(null));
-  }, [chatId, text, model?.provider, model?.model]); // eslint-disable-line react-hooks/exhaustive-deps
+    void previewRequest(chatId, text, model, forced).then(setP).catch(() => setP(null));
+  }, [chatId, text, model?.provider, model?.model, forced]); // eslint-disable-line react-hooks/exhaustive-deps
   const rate = settings?.usdToIdr ?? 16500;
   return (
     <Sheet open onClose={onClose} title="Yang dikirim ke AI">
@@ -100,7 +100,7 @@ export function StyleSheet({ chat, onClose }: { chat: Chat; onClose: () => void 
 
 /* ---------- Pesan tersemat ---------- */
 
-export function PinnedSheet({ messages, fill, names, onJump, onUnpin, onClose }: { messages: Message[]; fill: (t: string) => string; names: { char: string; user: string }; onJump: (m: Message) => void; onUnpin: (m: Message) => void; onClose: () => void }) {
+export function PinnedSheet({ messages, fill, nameOf, onJump, onUnpin, onClose }: { messages: Message[]; fill: (t: string, m?: Message) => string; nameOf: (m: Message) => string; onJump: (m: Message) => void; onUnpin: (m: Message) => void; onClose: () => void }) {
   const pinned = messages.filter((m) => m.pinned);
   return (
     <Sheet open onClose={onClose} title="Pesan tersemat">
@@ -109,9 +109,9 @@ export function PinnedSheet({ messages, fill, names, onJump, onUnpin, onClose }:
         <div key={m.id} className="summary-row">
           <button className="summary-main" onClick={() => onJump(m)}>
             <b>
-              📌 {m.role === 'user' ? names.user : names.char} · {timeAgo(m.createdAt)}
+              📌 {nameOf(m)} · {timeAgo(m.createdAt)}
             </b>
-            <small className="clamp3">{fill(messageText(m))}</small>
+            <small className="clamp3">{fill(messageText(m), m)}</small>
           </button>
           <button className="icon-btn small" aria-label="Lepas semat" onClick={() => onUnpin(m)}>
             <IconClose size={16} />

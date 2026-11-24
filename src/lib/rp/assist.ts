@@ -1,5 +1,5 @@
 import type { Character } from '../../db';
-import { loadWorld, macro } from './context';
+import { loadWorld, macro, transcript } from './context';
 import { rpAssist } from './engine';
 import { FIELD_ACTIONS, SYSTEM_RP_CARD, SYSTEM_RP_FIELD, SYSTEM_RP_PERSONA, SYSTEM_RP_POLISH, SYSTEM_RP_TRANSLATE } from './prompts';
 
@@ -101,7 +101,7 @@ export async function polishTurn(chatId: string, text: string, signal?: AbortSig
   const w = await loadWorld(chatId);
   if (!w) throw new Error('Chat tidak ditemukan.');
   const recent = w.messages.filter((m) => m.text.trim()).slice(-3);
-  const ctx = recent.map((m) => `${m.role === 'user' ? '{{user}}' : '{{char}}'}: ${m.text}`).join('\n\n');
+  const ctx = transcript(w, recent);
   const user = macro(w, `${ctx ? `[Pesan terakhir]\n${ctx}\n\n` : ''}[Giliran {{user}} yang diperhalus]\n${text}`);
   return rpAssist({ rootId: chatId, chatId, kind: 'rp-polish', label: 'Perhalus pesanku', system: macro(w, SYSTEM_RP_POLISH), user, maxTokens: 1200, signal });
 }

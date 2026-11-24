@@ -1,6 +1,6 @@
 import { db, type Chat, type Message, type RpLength, type UsageLog, type Version } from '../../db';
 import { ApiError, streamChat, type ApiMessage } from '../api';
-import { beginGen, currentGen, endGen, exclusive, patchGen, stopGeneration, UserError } from '../generate';
+import { beginGen, currentGen, endGen, exclusive, holdBusy, patchGen, stopGeneration, UserError } from '../generate';
 import { costUsd, isPeak } from '../pricing';
 import { estimateTokens, findModel, PROVIDER_INFO, usableModels, type ModelRef } from '../providers';
 import { getSettings, markChanged, temperatureFor, type Settings } from '../settings';
@@ -17,8 +17,11 @@ import {
   rpAutoThreshold,
   summaryBlocks,
   transcript,
+  withSpeaker,
+  castName,
   type RpWorld,
 } from './context';
+import { isGroupChat, MAX_MEMBERS, pickSpeaker } from './group';
 import { resolvePersona } from './data';
 import { CONTINUE_INSTR, rpMaxTokens, SYSTEM_RP_MEMORY, SYSTEM_RP_SUMMARY } from './prompts';
 
@@ -37,7 +40,8 @@ export async function rpModel(chatId: string | null, pick?: ModelRef | null): Pr
   let charModel: ModelRef | null = null;
   if (chatId) {
     const msgs = await db.messages.where('chatId').equals(chatId).sortBy('seq');
-    const m = [...msgs].reverse().find((x) => x.role === 'user' && x.model);
+    // Grup bisa berisi balasan berantai tanpa pesan pengguna, jadi model terakhir dicari di semua pesan.
+    const m = [...msgs].reverse().find((x) => x.model);
     if (m) last = { provider: m.provider ?? 'deepseek', model: m.model };
     const chat = await db.chats.get(chatId);
     const c = chat?.characterId ? await db.characters.get(chat.characterId) : undefined;
@@ -57,7 +61,7 @@ export async function startRpChat(characterId: string, opts: { personaId?: strin
   // Persona yang diikat tapi sudah dihapus → persona bawaan.
   const persona = await resolvePersona(opts.personaId ?? c.personaId);
   const now = Date.now();
-  const count = (await db.chats.where('characterId').equals(characterId).toArray()).filter((x) => !x.deletedAt).length;
+  const count = (await db.chats.where('characterId').equals(characterId).toArray()).filter((x) => !x.deletedAt && !isGroupChat(x)).length;
   const chat: Chat = {
     id: uid(),
     title: count ? `${c.name} #${count + 1}` : c.name,
@@ -93,6 +97,69 @@ export async function startRpChat(characterId: string, opts: { personaId?: strin
       );
     }
     await db.characters.update(characterId, { usedAt: now });
+  });
+  markChanged();
+  return chat.id;
+}
+
+export interface GroupStart {
+  memberIds: string[];
+  personaId?: string | null;
+  title?: string;
+  /** karakter pembuka dan indeks pembukanya; null = tanpa pembuka */
+  opener: { characterId: string; greeting: number } | null;
+}
+
+export async function startRpGroup(o: GroupStart): Promise<string> {
+  const ids = [...new Set(o.memberIds)].slice(0, MAX_MEMBERS);
+  if (ids.length < 2) throw new Error('Pilih minimal 2 karakter.');
+  const chars = (await db.characters.bulkGet(ids)).filter((c): c is NonNullable<typeof c> => !!c && !c.deletedAt);
+  if (chars.length < 2) throw new Error('Karakter tidak ditemukan.');
+  const persona = await resolvePersona(o.personaId ?? chars[0].personaId);
+  const now = Date.now();
+  const names = chars.map((c) => c.name.trim() || 'Karakter');
+  const chat: Chat = {
+    id: uid(),
+    title: o.title?.trim() || `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`,
+    titleAuto: !o.title?.trim(),
+    kind: 'roleplay',
+    pageId: null,
+    draft: '',
+    characterId: chars[0].id,
+    memberIds: chars.map((c) => c.id),
+    muted: [],
+    turnMode: 'auto',
+    chain: 1,
+    personaId: persona?.id ?? null,
+    memory: '',
+    memoryAtCount: 0,
+    rpLength: 'normal',
+    summaryMode: 'auto',
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: null,
+  };
+  const opener = o.opener ? chars.find((c) => c.id === o.opener!.characterId) : undefined;
+  const greetings = opener ? [opener.firstMes, ...opener.altGreetings].filter((g) => g.trim()) : [];
+  await db.transaction('rw', db.chats, db.messages, db.characters, async () => {
+    await db.chats.add(chat);
+    if (opener && greetings.length) {
+      const active = Math.min(Math.max(0, o.opener!.greeting), greetings.length - 1);
+      const sp = { speakerId: opener.id, speakerName: opener.name };
+      await db.messages.add(
+        baseMsg({
+          chatId: chat.id,
+          seq: now,
+          role: 'assistant',
+          greeting: true,
+          ...sp,
+          text: greetings[active],
+          versions: greetings.map((g) => ({ raw: g, ser: '', words: countWords(g), usage: { hit: 0, miss: 0, out: 0 }, costUsd: 0, ...sp })),
+          active,
+        }),
+      );
+    }
+    for (const c of chars) await db.characters.update(c.id, { usedAt: now });
   });
   markChanged();
   return chat.id;
@@ -135,6 +202,21 @@ export interface RpSendOptions {
   text: string;
   model: ModelRef;
   thinking: boolean;
+  /** grup: karakter yang dipilih pengguna untuk menjawab berikutnya */
+  speakerId?: string | null;
+}
+
+/** Siapa yang bicara berikutnya di grup (null = tidak ada, mis. mode Manual tanpa pilihan). */
+export function nextSpeaker(w: RpWorld, forced?: string | null, exclude?: Set<string>): string | null {
+  return pickSpeaker({
+    members: w.members.map((m) => ({ id: m.id, name: m.name })),
+    muted: w.chat.muted,
+    history: historyOf(w.messages),
+    mode: w.chat.turnMode ?? 'auto',
+    forced,
+    exclude,
+    fallbackId: w.chat.characterId,
+  });
 }
 
 export function sendRp(o: RpSendOptions): Promise<void> {
@@ -142,6 +224,7 @@ export function sendRp(o: RpSendOptions): Promise<void> {
     const chat = await db.chats.get(o.chatId);
     if (!chat) return;
     await requireKey(o.model);
+    if (isGroupChat(chat)) return sendGroup(chat, o);
     const seq = await nextSeq(chat.id);
     const user = baseMsg({
       chatId: chat.id,
@@ -161,19 +244,78 @@ export function sendRp(o: RpSendOptions): Promise<void> {
   });
 }
 
+/**
+ * Grup: pesan pengguna (kalau ada) lalu balasan karakter terpilih, berantai sampai `chain` balasan.
+ * Kolom kosong = tidak ada pesan pengguna; karakter berikutnya langsung melanjutkan.
+ */
+async function sendGroup(chat: Chat, o: RpSendOptions): Promise<void> {
+  const text = o.text.trim();
+  const seq = await nextSeq(chat.id);
+  const model = { provider: o.model.provider, model: o.model.model, thinking: o.thinking };
+  const user = text ? baseMsg({ chatId: chat.id, seq, role: 'user', text, ...model }) : null;
+  const w = await loadWorld(chat.id);
+  if (!w) return;
+  const first = nextSpeaker(user ? { ...w, messages: [...w.messages, user] } : w, o.speakerId);
+  if (!first) {
+    if (!user) throw new UserError('empty', 'Pilih karakter yang menjawab di baris avatar di atas kolom ketik.');
+    await db.messages.add(user);
+    await db.chats.update(chat.id, { updatedAt: Date.now(), draft: '' });
+    markChanged();
+    return;
+  }
+  const asst = groupAsst(w, chat.id, user ? seq + 1 : seq, first, model);
+  await db.messages.bulkAdd(user ? [user, asst] : [asst]);
+  await db.chats.update(chat.id, { updatedAt: Date.now(), draft: '' });
+  markChanged();
+  void chainRun(chat.id, asst, await getSettings(), chat.chain ?? 1, new Set([first]));
+}
+
+function groupAsst(w: RpWorld, chatId: string, seq: number, speakerId: string, model: { provider: string; model: string; thinking: boolean }): Message {
+  const c = w.members.find((m) => m.id === speakerId);
+  return baseMsg({ chatId, seq, role: 'assistant', status: 'streaming', speakerId, speakerName: c?.name ?? '', ...model });
+}
+
+/** Balasan berantai: setelah satu balasan selesai, karakter berikutnya (yang belum menjawab di giliran ini) menanggapi. */
+async function chainRun(chatId: string, first: Message, s: Settings, count: number, used: Set<string>): Promise<void> {
+  let asst = first;
+  for (let i = 0; ; i++) {
+    const status = await run({ chatId, asst, kind: 'new', settings: s });
+    if (i + 1 >= count || status !== 'done') return;
+    // Kunci ditahan sampai balasan berikutnya mulai (tidak ada await di run sebelum beginGen).
+    holdBusy(true);
+    try {
+      const w = await loadWorld(chatId);
+      if (!w || !w.group || (w.chat.turnMode ?? 'auto') === 'manual') return;
+      const next = nextSpeaker(w, null, used);
+      if (!next) return;
+      used.add(next);
+      asst = groupAsst(w, chatId, await nextSeq(chatId), next, { provider: asst.provider ?? 'deepseek', model: asst.model, thinking: asst.thinking });
+      await db.messages.add(asst);
+    } finally {
+      holdBusy(false);
+    }
+  }
+}
+
 async function requireKey(m: ModelRef) {
   const s = await getSettings();
   const r = findModel(s.providers, m);
   if (!r || !r.provider.apiKey.trim()) throw new UserError('nokey', 'Pilih model dan isi API key penyedianya dulu di Pengaturan → Penyedia AI.');
 }
 
-export function retryRp(asstId: string, model: ModelRef, thinking: boolean): Promise<void> {
+/** Coba lagi; `speakerId` (grup) = tulis ulang sebagai karakter lain. */
+export function retryRp(asstId: string, model: ModelRef, thinking: boolean, speakerId?: string | null): Promise<void> {
   return exclusive(async () => {
     const asst = await db.messages.get(asstId);
     if (!asst || asst.role !== 'assistant' || asst.greeting) return;
     await requireKey(model);
-    const versions = asst.versions.length || !asst.text.trim() ? asst.versions : [plainVersion(asst.text)];
-    const patch = { versions, active: Math.max(0, versions.length - 1), status: 'streaming' as const, error: null, provider: model.provider, model: model.model, thinking };
+    const versions = asst.versions.length || !asst.text.trim() ? asst.versions : [{ ...plainVersion(asst.text), speakerId: asst.speakerId, speakerName: asst.speakerName }];
+    let speaker: Partial<Message> = {};
+    if (speakerId && speakerId !== asst.speakerId) {
+      const c = await db.characters.get(speakerId);
+      if (c) speaker = { speakerId, speakerName: c.name };
+    }
+    const patch = { versions, active: Math.max(0, versions.length - 1), status: 'streaming' as const, error: null, provider: model.provider, model: model.model, thinking, ...speaker };
     await db.messages.update(asstId, patch);
     // Model pilihan juga dicatat di pesan pengguna sebelumnya (dipakai sebagai "model terakhir").
     const prev = (await db.messages.where('chatId').equals(asst.chatId).sortBy('seq')).filter((m) => m.seq < asst.seq && m.role === 'user').pop();
@@ -205,7 +347,7 @@ interface RunArgs {
 }
 
 /** Tanpa await sebelum beginGen: kunci "sedang menulis" harus langsung terpasang. */
-async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Promise<void> {
+async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Promise<Message['status']> {
   const resolved = findModel(s.providers, { provider: asst.provider ?? 'deepseek', model: asst.model });
   const thinking = kind === 'append' ? false : asst.thinking;
   const signal = beginGen({ chatId, messageId: asst.id, pageId: null, mode: 'roleplay', live: '', words: 0, thinking, kind });
@@ -222,13 +364,16 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
   const usePrefix = kind === 'append' && !!resolved && PROVIDER_INFO[resolved.provider.kind].prefix;
   try {
     if (!resolved) throw new ApiError('notfound', `Model "${asst.model}" tidak ada lagi di Pengaturan → Penyedia AI.`);
-    const w = await loadWorld(chatId);
-    if (!w) throw new ApiError('invalid', 'Chat atau karakter tidak ditemukan.');
+    const w0 = await loadWorld(chatId);
+    if (!w0) throw new ApiError('invalid', 'Chat atau karakter tidak ditemukan.');
+    const w = withSpeaker(w0, asst.speakerId);
     const length: RpLength = w.chat.rpLength ?? 'normal';
     const nm = names(w);
-    guard = (t) => guardReply(t, nm.char, nm.user);
-    const summaries = await prepareSummaries(w, resolved.model.context, signal);
-    const built = buildRp(w, { beforeSeq: asst.seq, mode: 'reply', length, summaries });
+    // Grup: dipotong juga kalau AI mulai menulis giliran anggota lain.
+    const others = [nm.user, ...(w.group ? w.members.filter((m) => m.id !== w.character.id).map((m) => m.name) : [])];
+    guard = (t) => guardReply(t, nm.char, others);
+    const summaries = await prepareSummaries(w0, resolved.model.context, signal);
+    const built = buildRp(w0, { beforeSeq: asst.seq, mode: 'reply', length, summaries, speakerId: asst.speakerId });
     lore = built.lore;
     const messages: ApiMessage[] = built.messages;
     if (kind === 'append') {
@@ -312,20 +457,24 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
       Object.assign(patch, { text: has ? full : base, versions, status: has ? status : restored, error: has ? errOrNull(status, error) : (error ?? 'Dihentikan sebelum ada teks.') });
     } else if (!has) {
       if (kind === 'retry' && cur.versions.length) {
-        Object.assign(patch, { text: cur.versions[cur.active].raw, status: restored, error: error ?? 'Tidak ada balasan.' });
+        const v = cur.versions[cur.active];
+        // Tulis ulang sebagai karakter lain gagal: kembali ke pembicara versi aktif.
+        Object.assign(patch, { text: v.raw, status: restored, error: error ?? 'Tidak ada balasan.', ...(v.speakerId ? { speakerId: v.speakerId, speakerName: v.speakerName } : {}) });
       } else {
         Object.assign(patch, { text: '', status: status === 'stopped' ? 'stopped' : 'error', error: error ?? (status === 'stopped' ? 'Dihentikan sebelum ada balasan.' : 'Tidak ada balasan.') });
       }
     } else {
-      let versions = [...(kind === 'retry' ? cur.versions : []), plainVersion(text, usage, cost)];
+      let versions = [...(kind === 'retry' ? cur.versions : []), { ...plainVersion(text, usage, cost), ...(cur.speakerId ? { speakerId: cur.speakerId, speakerName: cur.speakerName } : {}) }];
       if (versions.length > RP_MAX_VERSIONS) versions = versions.slice(-RP_MAX_VERSIONS);
       Object.assign(patch, { text, versions, active: versions.length - 1, status, error: errOrNull(status, error), lore, guardCut });
     }
     await db.messages.update(asst.id, patch);
     await db.chats.update(chatId, { updatedAt: Date.now() });
     const chat = await db.chats.get(chatId);
-    if (chat?.characterId) await db.characters.update(chat.characterId, { usedAt: Date.now() });
+    const who = cur.speakerId ?? chat?.characterId;
+    if (who) await db.characters.update(who, { usedAt: Date.now() });
     markChanged();
+    return (patch.status as Message['status']) ?? status;
   } finally {
     endGen();
   }
@@ -351,7 +500,8 @@ function cleanReply(raw: string): string {
 export async function selectRpVersion(msgId: string, idx: number): Promise<void> {
   const m = await db.messages.get(msgId);
   if (!m || idx < 0 || idx >= m.versions.length) return;
-  await db.messages.update(msgId, { active: idx, text: m.versions[idx].raw });
+  const v = m.versions[idx];
+  await db.messages.update(msgId, { active: idx, text: v.raw, ...(v.speakerId ? { speakerId: v.speakerId, speakerName: v.speakerName } : {}) });
   markChanged();
 }
 
@@ -403,7 +553,7 @@ export function impersonate(chatId: string, hint: string, model: ModelRef, onLiv
           if (k !== 'content') return;
           text += d;
           // Kebalikan balasan karakter: buang label nama persona, potong kalau mulai menulis giliran karakter.
-          const g = guardReply(text, nm.user, nm.char);
+          const g = guardReply(text, nm.user, w.members.map((m) => m.name));
           onLive(g.text);
           patchGen({ live: g.text, words: countWords(g.text) });
           if (g.cut && !cut) {
@@ -426,7 +576,7 @@ export function impersonate(chatId: string, hint: string, model: ModelRef, onLiv
       endGen();
     }
     await logUsage(chatId, 'rp-persona', 'Bantu persona', r, usage);
-    return guardReply(text, nm.user, nm.char).text.trim();
+    return guardReply(text, nm.user, w.members.map((m) => m.name)).text.trim();
   });
 }
 
@@ -499,12 +649,12 @@ export async function proposeMemory(chatId: string, onDelta?: (t: string) => voi
   if (!w) throw new Error('Chat tidak ditemukan.');
   const recent = historyOf(w.messages).slice(-40);
   const user = [
-    `[Karakter] ${w.character.name}`,
+    w.group ? `[Roleplay grup dengan ${castName(w)}. Catat juga hubungan antar tokoh.]` : `[Karakter] ${w.character.name}`,
     `[Memori saat ini]\n${w.chat.memory?.trim() || '(masih kosong)'}`,
     `[Pesan-pesan terbaru]\n${transcript(w, recent)}`,
     'Perbarui memori chat berdasarkan pesan-pesan di atas.',
   ].join('\n\n');
-  return rpAssist({ rootId: chatId, chatId, kind: 'rp-memory', label: 'Perbarui memori', system: macro(w, SYSTEM_RP_MEMORY), user, maxTokens: 1200, onDelta, signal });
+  return rpAssist({ rootId: chatId, chatId, kind: 'rp-memory', label: 'Perbarui memori', system: w.group ? SYSTEM_RP_MEMORY.replace(/\{\{char\}\}/g, castName(w)).replace(/\{\{user\}\}/g, names(w).user) : macro(w, SYSTEM_RP_MEMORY), user, maxTokens: 1200, onDelta, signal });
 }
 
 export async function saveMemory(chatId: string, text: string): Promise<void> {
@@ -579,7 +729,7 @@ async function summarizeBlock(w: RpWorld, msgs: Message[], locked: boolean, sign
     kind: 'rp-summary',
     label: 'Ringkasan pesan lama',
     system: SYSTEM_RP_SUMMARY,
-    user: `[Bagian roleplay dengan ${w.character.name}]\n${transcript(w, msgs)}\n\nRingkas bagian di atas.`,
+    user: `[Bagian roleplay dengan ${w.group ? castName(w) : w.character.name}]\n${transcript(w, msgs)}\n\nRingkas bagian di atas.`,
     maxTokens: 900,
     signal,
     locked,
@@ -661,7 +811,7 @@ export function suggestReplies(chatId: string, model: ModelRef): Promise<string[
     }
     await logUsage(chatId, 'rp-suggest', 'Saran balasan', r, usage);
     const nm = names(w);
-    const list = parseSuggestions(text).map((x) => guardReply(x, nm.user, nm.char).text).filter(Boolean);
+    const list = parseSuggestions(text).map((x) => guardReply(x, nm.user, w.members.map((m) => m.name)).text).filter(Boolean);
     if (!list.length) throw new Error('AI tidak memberi saran yang bisa dibaca. Coba lagi.');
     return list;
   });
@@ -681,7 +831,7 @@ export interface RequestPreview {
 }
 
 /** Pratinjau permintaan berikutnya tanpa mengirim apa pun. `text` kosong = "Lanjutkan". */
-export async function previewRequest(chatId: string, text: string, model: ModelRef | null): Promise<RequestPreview | null> {
+export async function previewRequest(chatId: string, text: string, model: ModelRef | null, forced?: string | null): Promise<RequestPreview | null> {
   const w = await loadWorld(chatId);
   if (!w) return null;
   const s = await getSettings();
@@ -690,14 +840,16 @@ export async function previewRequest(chatId: string, text: string, model: ModelR
   // Pesan yang akan dikirim ditambahkan sementara (tidak disimpan).
   const seq = (w.messages[w.messages.length - 1]?.seq ?? Date.now()) + 1;
   const fake = baseMsg({ chatId, seq, role: 'user', text: text.trim(), instr: text.trim() ? '' : CONTINUE_INSTR });
-  const world = { ...w, messages: [...w.messages, fake] };
+  // Grup dengan kolom kosong: tidak ada pesan pengguna, karakter berikutnya langsung melanjutkan.
+  const world = w.group && !text.trim() ? w : { ...w, messages: [...w.messages, fake] };
+  const speakerId = w.group ? nextSpeaker(world, forced) : null;
   const summaries = await prepareSummaries(world, r?.model.context, new AbortController().signal, true);
   const length = w.chat.rpLength ?? 'normal';
-  const built = buildRp(world, { mode: 'reply', length, summaries });
+  const built = buildRp(world, { mode: 'reply', length, summaries, speakerId });
   const parts = built.parts.map((p) => ({ ...p, tokens: estimateTokens(p.text.length) }));
   const total = parts.reduce((n, p) => n + p.tokens, 0);
   // Bagian sesudah riwayat (tambahan akhir + pesan baru) dihitung tanpa cache; sisanya kena cache.
-  const tailKeys = new Set(['lore', 'memory', 'pinned', 'reminder', 'style', 'length']);
+  const tailKeys = new Set(['lore', 'memory', 'pinned', 'reminder', 'style', 'turn', 'length']);
   const miss = parts.filter((p) => tailKeys.has(p.key)).reduce((n, p) => n + p.tokens, 0) + estimateTokens(messageText(fake).length);
   const out = Math.round(RP_LENGTH_TOKENS[length]);
   const cost = r ? costUsd(r.provider, r.model, { hit: Math.max(0, total - miss), miss, out }, isPeak(), s.usdToIdr) : null;

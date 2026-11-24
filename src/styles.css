@@ -2717,3 +2717,117 @@ body:has(.chat-screen) .toast {
   color: #191919;
   border-color: transparent;
 }
+
+/* ---------- Versi 3.2: group chat ---------- */
+.rp-stack {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.rp-stack-item {
+  position: relative;
+  display: inline-flex;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.rp-stack-more {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.rp-member-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0 2px 8px;
+  touch-action: pan-x pan-y;
+}
+.rp-member {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  min-width: 48px;
+  padding: 3px 2px;
+  border-radius: 10px;
+  opacity: 0.75;
+}
+.rp-member small {
+  font-size: 11px;
+  color: var(--text-3);
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rp-member .rp-avatar {
+  box-shadow: 0 0 0 2px transparent;
+}
+.rp-member.next {
+  opacity: 1;
+}
+.rp-member.next .rp-avatar {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.rp-member.next small {
+  color: var(--text);
+}
+.rp-member.forced {
+  background: var(--accent-soft);
+}
+.rp-member-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.rp-member-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rp-member-name b {
+  font-size: 14.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rp-member-name small {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.rp-pick {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.rp-pick-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--border);
+  color: transparent;
+  font-size: 13px;
+  font-weight: 700;
+}
+.rp-pick.on .rp-pick-mark {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}

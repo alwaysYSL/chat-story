@@ -4,6 +4,7 @@ import { markChanged } from '../settings';
 import { uid } from '../util';
 import type { ImportedCard } from './cards';
 import { blockHash } from './context';
+import { isGroupChat, MAX_MEMBERS, memberIdsOf } from './group';
 
 /* ---------- Karakter ---------- */
 
@@ -81,12 +82,37 @@ export async function duplicateCharacter(id: string): Promise<Character | null> 
   return copy;
 }
 
+/** Semua chat roleplay yang melibatkan karakter ini (chat 1:1 dan grup). */
+export async function chatsOfCharacter(id: string): Promise<Chat[]> {
+  const a = await db.chats.where('characterId').equals(id).toArray();
+  const b = await db.chats.where('memberIds').equals(id).toArray();
+  const map = new Map([...a, ...b].map((c) => [c.id, c]));
+  return [...map.values()];
+}
+
+/** Anggota lain yang masih ada (tidak di Sampah, tidak dihapus). */
+async function otherAlive(chat: Chat, id: string): Promise<string[]> {
+  const ids = (chat.memberIds ?? []).filter((x) => x !== id);
+  const found = await db.characters.bulkGet(ids);
+  return ids.filter((_, i) => found[i] && !found[i]!.deletedAt);
+}
+
+/**
+ * Karakter ke Sampah: chat 1:1-nya ikut ke Sampah. Grup yang masih punya anggota lain tetap berjalan tanpa karakter
+ * ini (kartunya tidak dikirim, pesan lamanya tetap ada).
+ */
 export async function trashCharacter(id: string): Promise<void> {
   const now = Date.now();
+  const chats = await chatsOfCharacter(id);
   await db.transaction('rw', db.characters, db.chats, async () => {
     await db.characters.update(id, { deletedAt: now });
-    const chats = await db.chats.where('characterId').equals(id).toArray();
-    for (const c of chats) if (!c.deletedAt) await db.chats.update(c.id, { deletedAt: now });
+    for (const c of chats) {
+      if (c.deletedAt) continue;
+      const others = await otherAlive(c, id);
+      if (isGroupChat(c) && others.length) {
+        if (c.characterId === id) await db.chats.update(c.id, { characterId: others[0] });
+      } else await db.chats.update(c.id, { deletedAt: now });
+    }
   });
   markChanged();
 }
@@ -95,22 +121,90 @@ export async function restoreCharacter(id: string): Promise<void> {
   const c = await db.characters.get(id);
   if (!c) return;
   const at = c.deletedAt;
+  const chats = await chatsOfCharacter(id);
   await db.transaction('rw', db.characters, db.chats, async () => {
     await db.characters.update(id, { deletedAt: null });
-    const chats = await db.chats.where('characterId').equals(id).toArray();
     for (const ch of chats) if (ch.deletedAt === at) await db.chats.update(ch.id, { deletedAt: null });
   });
   markChanged();
 }
 
 export async function deleteCharacterHard(id: string): Promise<void> {
-  const chats = await db.chats.where('characterId').equals(id).toArray();
-  for (const c of chats) await deleteChatPermanently(c.id);
+  for (const c of await chatsOfCharacter(id)) {
+    const rest = (c.memberIds ?? []).filter((x) => x !== id);
+    const exist = (await db.characters.bulkGet(rest)).filter(Boolean).length;
+    if (isGroupChat(c) && exist) {
+      // Grup tetap ada; pesan lama karakter ini tetap tampil dengan nama yang tersimpan.
+      await db.chats.update(c.id, { memberIds: rest, muted: (c.muted ?? []).filter((x) => x !== id), characterId: c.characterId === id ? rest[0] : c.characterId });
+    } else await deleteChatPermanently(c.id);
+  }
   await db.transaction('rw', db.characters, db.lorebooks, db.usage, async () => {
     await db.lorebooks.where('characterId').equals(id).delete();
     await db.usage.where('rootId').equals(id).delete();
     await db.characters.delete(id);
   });
+}
+
+/* ---------- Anggota grup ---------- */
+
+/** Tambah anggota. Chat 1:1 menjadi grup; balasan lamanya ditandai milik karakter semula. */
+export async function addMember(chatId: string, characterId: string): Promise<void> {
+  const chat = await db.chats.get(chatId);
+  if (!chat || !chat.characterId) return;
+  const ids = memberIdsOf(chat);
+  if (ids.includes(characterId)) return;
+  if (ids.length >= MAX_MEMBERS) throw new Error(`Maksimal ${MAX_MEMBERS} karakter dalam satu grup.`);
+  const now = Date.now();
+  await db.transaction('rw', db.chats, db.messages, db.characters, async () => {
+    if (!isGroupChat(chat)) {
+      const first = await db.characters.get(chat.characterId!);
+      const name = first?.name ?? '';
+      for (const m of await db.messages.where('chatId').equals(chatId).toArray()) {
+        if (m.role !== 'assistant' || m.speakerId) continue;
+        await db.messages.update(m.id, {
+          speakerId: chat.characterId!,
+          speakerName: name,
+          versions: m.versions.map((v) => ({ ...v, speakerId: v.speakerId ?? chat.characterId!, speakerName: v.speakerName ?? name })),
+        });
+      }
+    }
+    await db.chats.update(chatId, { memberIds: [...ids, characterId], turnMode: chat.turnMode ?? 'auto', chain: chat.chain ?? 1, updatedAt: now });
+    await db.characters.update(characterId, { usedAt: now });
+  });
+  markChanged();
+}
+
+export async function removeMember(chatId: string, characterId: string): Promise<void> {
+  const chat = await db.chats.get(chatId);
+  if (!chat) return;
+  const ids = memberIdsOf(chat).filter((x) => x !== characterId);
+  if (!ids.length) throw new Error('Grup harus punya minimal satu karakter.');
+  await db.chats.update(chatId, { memberIds: ids, muted: (chat.muted ?? []).filter((x) => x !== characterId), characterId: ids[0], updatedAt: Date.now() });
+  markChanged();
+}
+
+export async function moveMember(chatId: string, characterId: string, dir: -1 | 1): Promise<void> {
+  const chat = await db.chats.get(chatId);
+  if (!chat?.memberIds) return;
+  const ids = [...chat.memberIds];
+  const i = ids.indexOf(characterId);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  await db.chats.update(chatId, { memberIds: ids, characterId: ids[0] });
+  markChanged();
+}
+
+export async function toggleMute(chatId: string, characterId: string): Promise<boolean> {
+  const chat = await db.chats.get(chatId);
+  if (!chat) return false;
+  const muted = new Set(chat.muted ?? []);
+  const on = !muted.has(characterId);
+  if (on) muted.add(characterId);
+  else muted.delete(characterId);
+  await db.chats.update(chatId, { muted: [...muted] });
+  markChanged();
+  return on;
 }
 
 /** Chat roleplay terhapus bisa dipulihkan hanya kalau karakternya masih ada (karakter dipulihkan sekalian). */

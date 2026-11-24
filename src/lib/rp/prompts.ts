@@ -42,6 +42,36 @@ export function systemRp(style?: RpStyle): string {
   return `${intro}\n\n${lines.map((l) => `- ${l}`).join('\n')}`;
 }
 
+/** Instruksi bawaan group chat. `cast` = nama-nama anggota (urut, tetap) supaya bagian system kena cache. */
+export function systemRpGroup(style: RpStyle | undefined, cast: string): string {
+  const st = { ...DEFAULT_STYLE, ...style };
+  const intro =
+    st.role === 'narrator'
+      ? `Kamu adalah narator dan game master sebuah roleplay fiksi interaktif grup bersama {{user}}. Kamu menggambarkan dunia dan suasana, memerankan tokoh-tokoh grup (${cast}) serta tokoh figuran lain kecuali {{user}}, dan menceritakan akibat dari setiap tindakan {{user}}.`
+      : `Kamu adalah narator dan pemeran dalam roleplay fiksi interaktif grup bersama {{user}}. Tokoh-tokoh yang kamu perankan: ${cast}. Kamu juga boleh memerankan tokoh figuran di luar grup, kecuali {{user}}.`;
+  const pov =
+    st.pov === 'second'
+      ? 'Tulis dalam bahasa Indonesia, dengan narasi orang kedua: sebut {{user}} dengan "kamu", tokoh lain dengan nama. Dialog dalam tanda kutip "…", pikiran atau penekanan dengan *miring*.'
+      : st.pov === 'first'
+        ? 'Tulis dalam bahasa Indonesia, dengan narasi orang pertama dari sudut pandang tokoh yang sedang mendapat giliran ("aku"). Dialog dalam tanda kutip "…", pikiran atau penekanan dengan *miring*.'
+        : 'Tulis dalam bahasa Indonesia, dengan narasi orang ketiga. Dialog dalam tanda kutip "…", pikiran atau penekanan dengan *miring*.';
+  const lines = [
+    pov,
+    'Setiap balasan ditulis HANYA sebagai satu tokoh grup yang disebut di instruksi giliran di akhir permintaan. Jangan menulis ucapan, aksi, atau pikiran tokoh grup lain; mereka mendapat giliran sendiri.',
+    'JANGAN PERNAH menulis aksi, ucapan, pikiran, atau perasaan {{user}}. {{user}} dimainkan oleh pengguna.',
+    'Di riwayat, setiap balasan diawali nama tokohnya. Jangan menulis nama tokoh di awal balasanmu.',
+    'Tetap dalam peran. Jangan berkomentar di luar cerita dan jangan menyebut dirimu AI.',
+    'Tanggapi giliran terakhir, majukan adegan, dan jaga suara serta kepribadian tiap tokoh tetap berbeda.',
+    'Jangan mengulang kalimat atau frasa dari balasan sebelumnya.',
+    'Akhiri balasan di titik yang memberi kesempatan tokoh lain atau {{user}} untuk menanggapi.',
+  ];
+  return `${intro}\n\n${lines.map((l) => `- ${l}`).join('\n')}`;
+}
+
+export function turnInstr(name: string): string {
+  return `[Giliran berikutnya: ${name}. Tulis HANYA sebagai ${name}, tanpa awalan nama.]`;
+}
+
 /** Tempo dan ragam bahasa (dikirim di akhir permintaan). Kosong kalau semuanya bawaan. */
 export function styleBlock(style?: RpStyle): string {
   const st = { ...DEFAULT_STYLE, ...style };

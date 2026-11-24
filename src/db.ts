@@ -78,6 +78,16 @@ export interface Chat {
   rpStyle?: RpStyle;
   /** chat ini cabang dari chat lain */
   branchOf?: { chatId: string; title: string; seq: number };
+  /* ----- Group chat (Versi 3.2) ----- */
+  /** anggota grup berurutan (2–5); kosong = chat 1:1 dengan characterId. characterId = anggota pertama. */
+  memberIds?: string[];
+  /** anggota yang dibisukan sementara */
+  muted?: string[];
+  turnMode?: 'auto' | 'order' | 'manual';
+  /** balasan per giliran (berantai) */
+  chain?: 1 | 2 | 3;
+  /** menggantikan skenario masing-masing kartu */
+  groupScenario?: string;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -102,6 +112,9 @@ export interface Version {
   costUsd: number;
   /** raw sudah berupa isi naskah bersih (editan penulis / hasil sambungan): jangan dibersihkan ulang */
   clean?: boolean;
+  /** group chat: pembicara versi ini (Tulis ulang sebagai…) */
+  speakerId?: string;
+  speakerName?: string;
 }
 
 export interface Message {
@@ -147,6 +160,9 @@ export interface Message {
   guardCut?: boolean;
   /** roleplay: pesan disematkan */
   pinned?: boolean;
+  /** group chat: karakter yang menulis balasan ini (nama disimpan supaya tetap tampil walau karakter dihapus) */
+  speakerId?: string;
+  speakerName?: string;
   createdAt: number;
 }
 
@@ -305,6 +321,10 @@ db.version(3).stores({
   personas: 'id, deletedAt',
   lorebooks: 'id, characterId, deletedAt',
   rpSummaries: 'id, chatId',
+});
+
+db.version(4).stores({
+  chats: 'id, pageId, updatedAt, deletedAt, characterId, *memberIds',
 });
 
 /** Versi format file backup. 2 = Versi 3.0.0 (roleplay); versi lama menolak file ini dan meminta update. */
