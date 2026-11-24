@@ -42,6 +42,11 @@ Beranda ─┬─ Page cerita ── Page bab
 
 Bar bawah (di Beranda, tab Chat, dan page): **🔍 Cari · Ask AI · ✏️ Page baru**.
 
+**Geser antar layar utama** (Versi 2): urutan **Pengaturan ← Beranda → Chat**. Geser jari ke kiri untuk layar di kanan, ke kanan untuk layar di kiri; tombol di atas (avatar, Beranda, Chat) tetap bisa diketuk.
+- Tidak aktif kalau gerakan dimulai di tepi layar (dipakai gestur back Android), di kolom isian, atau di area yang bisa digeser ke samping (kartu Terbaru).
+- Tidak ada layar di arah itu: layar tertahan seperti karet, lalu kembali.
+- Riwayat: Beranda adalah akar. Back dari Chat atau Pengaturan selalu kembali ke Beranda, tidak bolak-balik antar tab.
+
 ---
 
 ## 4. Layar
@@ -120,7 +125,7 @@ Tampilan dan perilaku mengikuti aplikasi chat AI pada umumnya (ChatGPT, Claude, 
 Mencari di judul dan isi semua page, serta judul chat.
 
 ### 4.6 Pengaturan
-- **Penyedia AI:** daftar penyedia (DeepSeek, Vikey, Poolside, OpenRouter bawaan, plus penyedia lain yang bisa ditambah). Per penyedia: nama, base URL, API key, tes koneksi, dan daftar model. Per model: model id, nama tampilan, bisa membaca gambar atau tidak, cara mengatur thinking, dan harga per 1 juta token (USD atau Rupiah; boleh kosong).
+- **Penyedia AI:** daftar penyedia (DeepSeek, Vikey, Poolside, TokenKoding, OpenRouter bawaan, plus penyedia lain yang bisa ditambah). Per penyedia: nama, base URL, API key, tes koneksi, dan daftar model. Per model: model id, nama tampilan, bisa membaca gambar atau tidak, cara mengatur thinking, dan harga per 1 juta token (USD atau Rupiah; boleh kosong), tagihan minimal per permintaan, dan batas konteks. Tombol **Ambil daftar model** mengisi model dari endpoint `/models` penyedia.
 - **Model default**, thinking default, kreativitas (Stabil / Normal / Liar).
 - **Panjang tulisan:** target pembukaan (default 2000–3000 kata), target lanjutan (default 500–700 kata), batas saran bab baru (default 5.000 kata).
 - **Biaya:** kurs USD → Rupiah (manual), peringatan jam peak (08–11 dan 13–17 WIB, Senin–Jumat).
@@ -282,14 +287,21 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 
 ## 12. Cakupan versi
 
-**Versi 1:** semua yang dijelaskan di dokumen ini.
+**Penomoran:** nomor utama aplikasi mengikuti Versi di dokumen ini. Fitur Versi 2 pertama dirilis sebagai **2.0.0**, fitur berikutnya 2.1.0, 2.2.0, dan seterusnya; perbaikan kecil menaikkan angka terakhir. Setiap rilis di `main` otomatis membuat APK baru di Releases.
 
-**Versi 2 (nanti):**
-- **Catatan cerita** (*story bible*): daftar fakta, karakter, dan status cerita yang selalu dikirim ke AI, disematkan seperti brief, dengan tombol "Minta AI perbarui catatan" setiap kali satu bab selesai.
-- Cari kata di dalam naskah yang sedang dibuka.
-- Pilih teks → minta AI menulis ulang bagian itu.
-- Lampiran PDF (lewat API OCR DeepSeek).
-- **Ringkasan bab lama:** bab yang sudah selesai diganti ringkasannya (dibuat sekali per bab, disimpan supaya tetap kena cache); hanya aktif kalau konteks mendekati batas model atau dinyalakan sendiri.
+**Versi 1 (1.0–1.5):** semua yang dijelaskan di bagian 1–11.
+
+**Versi 2**, urutan pengerjaan:
+
+| # | Fitur | Rilis |
+|---|---|---|
+| 1 | **TokenKoding sebagai penyedia bawaan** (harga Rupiah, minimal Rp10 per permintaan; penyedia TokenKoding yang dulu ditambahkan sendiri otomatis menjadi bawaan tanpa kehilangan API key dan riwayat). **Biaya minimum per permintaan** bisa diisi per model. **Ambil daftar model** dari endpoint `/models` penyedia (di APK berlaku untuk semua penyedia; di versi web hanya penyedia yang mengizinkan CORS). **Geser antar layar utama.** | 2.0.0 |
+| 2 | **Backup otomatis di APK:** backup mingguan ke `Documents/ChatStory` tanpa perlu menekan apa pun (kalau ada perubahan), beberapa file terakhir disimpan. | |
+| 3 | **Cari & ganti** di naskah yang dibuka, dengan pilihan ganti di seluruh cerita (semua bab), mis. untuk mengganti nama karakter. **Tandai paragraf sebagai milik saya**, untuk paragraf yang diketik sebelum versi 1.4. | |
+| 4 | **Catatan cerita** (*story bible*): fakta, karakter, dan status cerita yang selalu dikirim ke AI, disematkan seperti brief; AI bisa mengusulkan pembaruan setiap kali satu bab selesai. Rancangan detail dibahas sebelum dikerjakan. | |
+| 5 | **Ringkasan bab lama:** bab yang sudah selesai diganti ringkasannya (dibuat sekali per bab, disimpan supaya tetap kena cache); aktif kalau konteks mendekati batas model atau dinyalakan sendiri. Rancangan detail dibahas sebelum dikerjakan. | |
+| 6 | **Pilih teks → minta AI menulis ulang bagian itu.** Rancangan detail dibahas sebelum dikerjakan. | |
+| 7 | **Lampiran PDF:** teks diambil langsung di HP (gratis, semua penyedia). PDF hasil scan (berupa gambar) lewat OCR menyusul. | |
 
 **Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat.
 
