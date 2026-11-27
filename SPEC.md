@@ -2,7 +2,7 @@
 
 Aplikasi Android (PWA dan APK) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, TokenKoding, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan. Mulai Versi 3 ada modul **Roleplay** (bagian 14).
 
-Status: Versi 1, 2, dan 3 (3.0–3.2) selesai.
+Status: Versi 1, 2, dan 3 (3.0–3.2) selesai. **3.3 (konsistensi cerita): rancangan, menunggu persetujuan.**
 
 ---
 
@@ -312,6 +312,7 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 | 2 | Perbaikan: persona terhapus, ringkasan per blok, chat panjang, batas konteks roleplay, riwayat biaya karakter, kata kunci kedua lorebook, pengaman balasan, kotak teks di sheet | 3.0.1 ✓ |
 | 3 | Foto avatar (lihat, perbesar, crop saat unggah), model & kreativitas per karakter, lihat yang dikirim ke AI, saran balasan, cabang chat, sematkan & cari pesan, jadikan cerita, gaya cerita per chat (bagian 14.12) | 3.1.0 ✓ |
 | 4 | Group chat: beberapa karakter dalam satu chat (bagian 14.13) | 3.2.0 ✓ |
+| 5 | Konsistensi cerita: keadaan adegan otomatis, memori linimasa & rencana otomatis, instruksi kesinambungan, suhu Konsisten (bagian 14.14) | 3.3.0 |
 
 **Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat. Untuk Roleplay: galeri/berbagi karakter publik, script lorebook, suara (TTS).
 
@@ -611,3 +612,50 @@ user      : giliran Anda terbaru
 - Usulan memori untuk grup mencakup hubungan antar tokoh.
 - Riwayat biaya chat seperti biasa; riwayat biaya karakter memasukkan grup yang diikutinya.
 - Backup dan restore mencakup grup.
+
+### 14.14 Versi 3.3: Konsistensi cerita
+
+Tujuan: detail kecil (waktu, pakaian, barang yang dipegang, siapa di mana) tidak dilupakan atau dihidupkan lagi selama detail itu masih berhubungan dengan cerita. Contoh masalah di 3.2: permen karet yang sudah dibuang dikunyah lagi; "besok Minggu, libur" dilupakan; jaket yang sudah digantung di kursi masih dipakai.
+
+**Penyebab di 3.2:** tidak ada catatan keadaan adegan; kartu (mis. "selalu memakai jaket") dikirim utuh di setiap permintaan tanpa penjelasan bahwa itu kebiasaan umum; memori diperbarui manual setiap ±30 pesan dan tidak mencatat waktu, pakaian, atau barang; ringkasan pesan lama membuang detail keadaan; tambahan aplikasi ditempel menyatu dengan pesan pengguna; `system_prompt` kartu menggantikan seluruh instruksi aplikasi.
+
+#### a. Keadaan adegan (untuk AI)
+- Catatan terstruktur yang **diperbarui otomatis setelah setiap balasan** lewat permintaan terpisah yang kecil. Tidak tampil di layar chat; hanya untuk AI.
+- Bagian tetap:
+  ```
+  Waktu   : hari & waktu cerita (mis. Sabtu malam ±21.00, hari ke-2). Besok: Minggu, libur kuliah.
+  Lokasi  : tempat sekarang
+  Hadir   : siapa saja di adegan, posisinya kalau penting
+  Pakaian : per tokoh: yang dipakai, dan yang dilepas beserta letaknya (mis. jaket kulit digantung di kursi)
+  Barang  : yang dipegang / dibawa / ada di dekat tokoh; yang sudah dibuang, habis, atau ditinggal beserta letaknya
+  Kondisi : fisik & emosi yang sedang berlaku (basah, mengantuk, luka di tangan kiri, marah ke Dimas)
+  Sekitar : keadaan tempat yang berpengaruh (lampu mati, hujan deras, pintu dikunci)
+  ```
+- **Aturan pencatat:** pertahankan setiap detail selama masih berhubungan dengan cerita; ubah hanya kalau cerita mengubahnya; catat juga perubahan yang ditulis pengguna ("aku buang permenku"); detail yang sudah tidak berhubungan sama sekali (adegan lain, lama tidak disebut) boleh dihapus. Maks. ±350 kata.
+- Masukan pencatat: keadaan sebelumnya, giliran pengguna terakhir, balasan terakhir, dan kartu ringkas (nama + deskripsi, sebagai acuan awal saja). Model: model chat itu, thinking mati, suhu Stabil, `max_tokens` ±700.
+- **Disimpan per versi balasan** (snapshot keadaan sesudah balasan itu). Akibatnya Coba lagi, ganti versi, hapus pesan, edit, cabang, dan duplikat otomatis memakai keadaan yang benar: permintaan berikutnya memakai snapshot dari balasan terakhir sebelum titik itu. Mengedit pesan menghapus snapshot pesan itu; permintaan berikutnya menghitung ulang dari snapshot sebelumnya.
+- **Urutan & kunci:** pencatatan berjalan segera setelah balasan selesai, di belakang layar. Kalau Anda mengirim sebelum selesai, pesan menunggu sebentar (kolom ketik menulis "Mencatat keadaan adegan…") karena balasan berikutnya butuh keadaan terbaru. Stop membatalkan pencatatan; sebelum balasan berikutnya keadaan dihitung dulu. Kalau pencatatan gagal, balasan tetap ditulis dengan snapshot terakhir yang berhasil, dan pencatatan diulang di giliran berikutnya.
+- Group chat: semua tokoh yang hadir dicatat. Berantai: satu pencatatan per balasan.
+- **Lihat & koreksi:** menu chat → **Keadaan adegan** menampilkan catatan saat ini dan bisa diedit (koreksi disimpan ke snapshot balasan terakhir dan dipakai di permintaan berikutnya). Saklar **Catat keadaan adegan** (bawaan nyala) per chat.
+- Biaya dicatat di riwayat biaya chat sebagai "Keadaan adegan" (perkiraan ±Rp6 per giliran di DeepSeek Flash resmi; minimal Rp10 di TokenKoding karena tagihan minimal).
+
+#### b. Memori: linimasa & rencana, otomatis
+- Memori chat mendapat bagian tetap: **Hubungan** · **Linimasa** (per hari cerita: "Hari 1 (Jumat): …") · **Rencana & janji** (dengan waktunya: "Minggu: libur, mau ke pantai") · **Fakta yang sudah pasti** · **Benang terbuka**. Perubahan jangka panjang (mis. Rika memotong rambut) masuk Fakta; detail sesaat masuk Keadaan adegan.
+- **Diperbarui otomatis setiap 10 pesan** (di belakang layar, sesudah pencatatan keadaan), tanpa tawaran. Pembaruan membaca memori lama, keadaan adegan, dan pesan sejak pembaruan terakhir. Memori tetap bisa diedit; saklar **Perbarui otomatis** di sheet Memori (bawaan nyala). Biaya dicatat sebagai "Perbarui memori".
+- Ringkasan pesan lama wajib ditutup dengan **"Keadaan di akhir bagian"**: waktu, lokasi, pakaian, barang, dan rencana yang masih berlaku.
+
+#### c. Cara instruksi dikirim
+- Instruksi aplikasi **selalu dipakai**. `system_prompt` kartu ditambahkan di bawahnya sebagai **[Instruksi tambahan dari kartu]**, tidak lagi menggantikan (termasuk di grup).
+- Aturan kesinambungan baru di instruksi bawaan:
+  - Sebelum menulis, cocokkan dengan Keadaan adegan dan Memori; keduanya lebih berlaku daripada kartu.
+  - Kartu menggambarkan kebiasaan umum tokoh; keadaan adegan saat ini yang menentukan apa yang sedang dipakai, dipegang, dan dilakukan.
+  - Jangan memakai lagi barang yang sudah dibuang/habis/ditinggal, pakaian yang sudah dilepas, atau mengubah waktu dan rencana tanpa sebab di cerita.
+  - Waktu cerita hanya maju kalau cerita memajukannya.
+- Semua tambahan per giliran dikirim sebagai **satu pesan terpisah** sesudah giliran pengguna, berlabel "[Catatan aplikasi untuk balasan berikutnya. Bukan bagian cerita; jangan dikutip.]", urut: lore yang cocok → memori → momen tersemat → pengingat aturan (daftar bernomor) → gaya → **keadaan adegan** → giliran (grup) → target panjang. Tidak disimpan ke riwayat (cache tetap kena).
+- Perubahan instruksi bawaan ini membuat cache chat lama dimulai ulang sekali.
+
+#### d. Suhu: pilihan "Konsisten"
+- Gaya cerita → **Suhu:** *Ikuti kreativitas* (bawaan, seperti sekarang) · *Konsisten* (memakai tingkat Stabil: 1,2 di DeepSeek resmi, 0,6 di penyedia lain). Konsisten lebih patuh pada detail dan aturan, variasi kalimat sedikit berkurang.
+
+#### e. Tidak dibuat di 3.3
+- Pemeriksa kesinambungan (AI kedua mengecek dan memperbaiki setiap balasan): biaya ±2× per giliran dan balasan lebih lambat. Dipertimbangkan lagi kalau 3.3 belum cukup.
