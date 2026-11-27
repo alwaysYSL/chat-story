@@ -2,11 +2,11 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useState } from 'react';
 import { db, type Chat, type Message, type RpStyle } from '../../db';
 import { IconClose, IconCopy, IconRetry, IconSparkle } from '../../components/Icons';
-import { Sheet, toast } from '../../components/ui';
+import { Sheet, Toggle, toast } from '../../components/ui';
 import { useActiveGen, stopGeneration, UserError } from '../../lib/generate';
 import type { ModelRef } from '../../lib/providers';
 import { messageText } from '../../lib/rp/context';
-import { previewRequest, type RequestPreview } from '../../lib/rp/engine';
+import { currentScene, previewRequest, rescanScene, saveScene, type RequestPreview } from '../../lib/rp/engine';
 import { DEFAULT_STYLE } from '../../lib/rp/prompts';
 import { convertToStory, DENSITY, estimateStory, type StoryDensity, type StoryEstimate, type StoryRange } from '../../lib/rp/toStory';
 import { markChanged, useSettings } from '../../lib/settings';
@@ -36,6 +36,7 @@ export function PreviewSheet({ chatId, text, model, forced, onClose }: { chatId:
             Permintaan berikutnya {text.trim() ? 'dengan isi kolom ketik' : '(Lanjutkan)'} untuk {p.model}: ±<b>{formatNumber(p.total)}</b> token
             {p.costUsd !== null ? <> · perkiraan biaya {formatRupiah(p.costUsd * rate)} (bagian awal kena cache)</> : null}.
             {p.pendingSummaries ? ` ${p.pendingSummaries} blok pesan lama akan diringkas dulu (biaya terpisah).` : ''}
+            {p.pendingScene ? ' Keadaan adegan akan dicatat dulu (biaya terpisah); yang tampil di bawah adalah catatan terakhir.' : ''}
           </p>
           {p.parts.map((x) => (
             <details key={x.key} className="preview-part">
@@ -67,6 +68,7 @@ const STYLE_OPTS: { key: keyof RpStyle; label: string; opts: [string, string][] 
   { key: 'role', label: 'Peran AI', opts: [['actor', 'Pemeran'], ['narrator', 'Narator / GM']] },
   { key: 'pace', label: 'Tempo', opts: [['slow', 'Lambat'], ['medium', 'Sedang'], ['fast', 'Cepat']] },
   { key: 'register', label: 'Ragam bahasa', opts: [['baku', 'Baku'], ['santai', 'Santai'], ['gaul', 'Gaul']] },
+  { key: 'temp', label: 'Suhu', opts: [['follow', 'Ikuti kreativitas'], ['consistent', 'Konsisten']] },
 ];
 
 export function StyleSheet({ chat, onClose }: { chat: Chat; onClose: () => void }) {
@@ -92,8 +94,89 @@ export function StyleSheet({ chat, onClose }: { chat: Chat; onClose: () => void 
       <p className="note pad">
         Orang kedua: {'{{user}}'} disebut "kamu". Orang pertama: {'{{char}}'} bercerita sebagai "aku". Narator/GM: AI menggambarkan dunia dan akibat tindakan Anda, dan
         boleh menawarkan pilihan. Tempo dan ragam bahasa dikirim di akhir permintaan, jadi tidak mereset cache; sudut pandang dan peran mengubah instruksi awal (cache
-        dimulai ulang sekali).
+        dimulai ulang sekali). Suhu Konsisten memakai tingkat Stabil: lebih patuh pada detail dan aturan, variasi kalimat sedikit berkurang.
       </p>
+    </Sheet>
+  );
+}
+
+/* ---------- Keadaan adegan (3.3) ---------- */
+
+export function SceneSheet({ chat, onClose }: { chat: Chat; onClose: () => void }) {
+  const cur = useLiveQuery(() => currentScene(chat.id), [chat.id]);
+  const [text, setText] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const on = !chat.sceneOff;
+  const shown = text ?? cur?.text ?? '';
+  const dirty = text !== null && text !== (cur?.text ?? '');
+  const rescan = async () => {
+    setBusy(true);
+    try {
+      await rescanScene(chat.id);
+      setText(null);
+      toast('Keadaan adegan dicatat ulang');
+    } catch (e) {
+      toast('Gagal: ' + errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Sheet open onClose={onClose} title="Keadaan adegan">
+      <div className="field-row sheet-row">
+        <span>
+          Catat keadaan adegan
+          <small>Waktu, lokasi, pakaian, barang, dan kondisi tokoh, dicatat otomatis sesudah setiap balasan. Hanya dibaca AI.</small>
+        </span>
+        <Toggle
+          checked={on}
+          onChange={async (v) => {
+            await db.chats.update(chat.id, { sceneOff: !v });
+            markChanged();
+          }}
+          label="Catat keadaan adegan"
+        />
+      </div>
+      {!on ? (
+        <p className="note pad">Mati: AI hanya mengandalkan riwayat, memori, dan ringkasan. Biaya per giliran sedikit lebih murah.</p>
+      ) : cur === undefined ? null : cur === null ? (
+        <p className="note pad">Belum ada balasan. Keadaan adegan dicatat sesudah balasan pertama.</p>
+      ) : busy ? (
+        <div className="assist-live">
+          <span className="typing">
+            <span />
+            <span />
+            <span />
+          </span>
+        </div>
+      ) : (
+        <>
+          <p className="note pad">
+            {cur.running
+              ? 'Sedang mencatat balasan terakhir. Yang tampil: catatan sebelumnya.'
+              : cur.stored
+                ? 'Catatan sesudah balasan terakhir. Koreksi kalau ada yang salah; dipakai di permintaan berikutnya.'
+                : 'Balasan terakhir belum dicatat (mis. baru diedit); dicatat sebelum balasan berikutnya. Yang tampil: catatan sebelumnya.'}
+          </p>
+          <textarea className="input textarea-md" aria-label="Isi keadaan adegan" value={shown} placeholder={'Waktu   : …\nLokasi  : …\nPakaian : …\nBarang  : …'} onChange={(e) => setText(e.target.value)} />
+          <div className="row-buttons pad">
+            <button className="btn" onClick={() => void rescan()}>
+              <IconRetry size={16} /> Catat ulang sekarang
+            </button>
+            <button
+              className="btn btn-primary"
+              disabled={!dirty}
+              onClick={async () => {
+                await saveScene(chat.id, shown);
+                setText(null);
+                toast('Keadaan adegan disimpan');
+              }}
+            >
+              Simpan
+            </button>
+          </div>
+        </>
+      )}
     </Sheet>
   );
 }

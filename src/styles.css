@@ -1329,6 +1329,10 @@ section {
   color: var(--text-3);
   font-size: 12.5px;
 }
+/* saklar di dalam sheet (Keadaan adegan, Memori chat): sejajar dengan judul sheet */
+.field-row.sheet-row {
+  padding: 10px 12px;
+}
 .field-num {
   display: inline-flex;
   gap: 6px;
@@ -1362,7 +1366,7 @@ input[type='range'] {
   gap: 12px;
   width: 100%;
   text-align: left;
-  padding: 10px 20px;
+  padding: 10px 12px;
   color: var(--text-2);
 }
 .search-row span {
@@ -1379,7 +1383,7 @@ input[type='range'] {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 20px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
 }
 .trash-text {

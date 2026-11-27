@@ -2,7 +2,7 @@
 
 Aplikasi Android (PWA dan APK) untuk menulis cerita hobi bersama AI (DeepSeek, Vikey, Poolside, TokenKoding, OpenRouter, atau penyedia lain berformat OpenAI), dengan alur kerja seperti Notion mobile + Notion AI, tetapi hanya berisi fitur yang dibutuhkan. Mulai Versi 3 ada modul **Roleplay** (bagian 14).
 
-Status: Versi 1, 2, dan 3 (3.0–3.2) selesai. **3.3 (konsistensi cerita): rancangan, menunggu persetujuan.**
+Status: Versi 1, 2, dan 3 (3.0–3.3) selesai.
 
 ---
 
@@ -312,7 +312,7 @@ Data diberi nomor versi skema dengan migrasi otomatis. Aplikasi membuat backup o
 | 2 | Perbaikan: persona terhapus, ringkasan per blok, chat panjang, batas konteks roleplay, riwayat biaya karakter, kata kunci kedua lorebook, pengaman balasan, kotak teks di sheet | 3.0.1 ✓ |
 | 3 | Foto avatar (lihat, perbesar, crop saat unggah), model & kreativitas per karakter, lihat yang dikirim ke AI, saran balasan, cabang chat, sematkan & cari pesan, jadikan cerita, gaya cerita per chat (bagian 14.12) | 3.1.0 ✓ |
 | 4 | Group chat: beberapa karakter dalam satu chat (bagian 14.13) | 3.2.0 ✓ |
-| 5 | Konsistensi cerita: keadaan adegan otomatis, memori linimasa & rencana otomatis, instruksi kesinambungan, suhu Konsisten (bagian 14.14) | 3.3.0 |
+| 5 | Konsistensi cerita: keadaan adegan otomatis, memori linimasa & rencana otomatis, instruksi kesinambungan, suhu Konsisten (bagian 14.14) | 3.3.0 ✓ |
 
 **Tidak dibuat:** pembuatan gambar, sinkronisasi cloud, kolaborasi, agent/asisten kustom, database/tabel, template, input suara terpisah (pakai ketik suara Gboard), sub-page lebih dari satu tingkat. Untuk Roleplay: galeri/berbagi karakter publik, script lorebook, suara (TTS).
 
@@ -637,11 +637,12 @@ Tujuan: detail kecil (waktu, pakaian, barang yang dipegang, siapa di mana) tidak
 - **Urutan & kunci:** pencatatan berjalan segera setelah balasan selesai, di belakang layar. Kalau Anda mengirim sebelum selesai, pesan menunggu sebentar (kolom ketik menulis "Mencatat keadaan adegan…") karena balasan berikutnya butuh keadaan terbaru. Stop membatalkan pencatatan; sebelum balasan berikutnya keadaan dihitung dulu. Kalau pencatatan gagal, balasan tetap ditulis dengan snapshot terakhir yang berhasil, dan pencatatan diulang di giliran berikutnya.
 - Group chat: semua tokoh yang hadir dicatat. Berantai: satu pencatatan per balasan.
 - **Lihat & koreksi:** menu chat → **Keadaan adegan** menampilkan catatan saat ini dan bisa diedit (koreksi disimpan ke snapshot balasan terakhir dan dipakai di permintaan berikutnya). Saklar **Catat keadaan adegan** (bawaan nyala) per chat.
+- Pratinjau "Lihat yang dikirim ke AI" menampilkan bagian Keadaan adegan; kalau balasan terakhir belum dicatat, pratinjau memberi tahu bahwa pencatatan berjalan dulu saat dikirim.
 - Biaya dicatat di riwayat biaya chat sebagai "Keadaan adegan" (perkiraan ±Rp6 per giliran di DeepSeek Flash resmi; minimal Rp10 di TokenKoding karena tagihan minimal).
 
 #### b. Memori: linimasa & rencana, otomatis
 - Memori chat mendapat bagian tetap: **Hubungan** · **Linimasa** (per hari cerita: "Hari 1 (Jumat): …") · **Rencana & janji** (dengan waktunya: "Minggu: libur, mau ke pantai") · **Fakta yang sudah pasti** · **Benang terbuka**. Perubahan jangka panjang (mis. Rika memotong rambut) masuk Fakta; detail sesaat masuk Keadaan adegan.
-- **Diperbarui otomatis setiap 10 pesan** (di belakang layar, sesudah pencatatan keadaan), tanpa tawaran. Pembaruan membaca memori lama, keadaan adegan, dan pesan sejak pembaruan terakhir. Memori tetap bisa diedit; saklar **Perbarui otomatis** di sheet Memori (bawaan nyala). Biaya dicatat sebagai "Perbarui memori".
+- **Diperbarui otomatis setiap 10 pesan** (di belakang layar, sesudah pencatatan keadaan), tanpa tawaran. Pembaruan membaca memori lama, keadaan adegan, dan pesan sejak pembaruan terakhir. Memori tetap bisa diedit; saklar **Perbarui otomatis** di sheet Memori (bawaan nyala). Kalau saklar dimatikan, tawaran "Perbarui memori" setiap 30 pesan muncul lagi seperti di 3.2. Kalau memori diedit pengguna selagi pembaruan otomatis berjalan, hasil otomatis tidak menimpanya. Biaya dicatat sebagai "Perbarui memori".
 - Ringkasan pesan lama wajib ditutup dengan **"Keadaan di akhir bagian"**: waktu, lokasi, pakaian, barang, dan rencana yang masih berlaku.
 
 #### c. Cara instruksi dikirim
@@ -651,7 +652,7 @@ Tujuan: detail kecil (waktu, pakaian, barang yang dipegang, siapa di mana) tidak
   - Kartu menggambarkan kebiasaan umum tokoh; keadaan adegan saat ini yang menentukan apa yang sedang dipakai, dipegang, dan dilakukan.
   - Jangan memakai lagi barang yang sudah dibuang/habis/ditinggal, pakaian yang sudah dilepas, atau mengubah waktu dan rencana tanpa sebab di cerita.
   - Waktu cerita hanya maju kalau cerita memajukannya.
-- Semua tambahan per giliran dikirim sebagai **satu pesan terpisah** sesudah giliran pengguna, berlabel "[Catatan aplikasi untuk balasan berikutnya. Bukan bagian cerita; jangan dikutip.]", urut: lore yang cocok → memori → momen tersemat → pengingat aturan (daftar bernomor) → gaya → **keadaan adegan** → giliran (grup) → target panjang. Tidak disimpan ke riwayat (cache tetap kena).
+- Semua tambahan per giliran dikirim sebagai **satu blok catatan** sesudah giliran pengguna, berlabel "[Catatan aplikasi untuk balasan berikutnya. Bukan bagian cerita; jangan dikutip.]". Kalau giliran terakhir milik pengguna, blok ini digabung ke pesan yang sama (beberapa API menolak dua pesan pengguna berturut-turut); labelnya yang memisahkan catatan dari cerita. Urut: lore yang cocok → memori → momen tersemat → pengingat aturan (daftar bernomor) → gaya → **keadaan adegan** → giliran (grup) → target panjang. Tidak disimpan ke riwayat (cache tetap kena).
 - Perubahan instruksi bawaan ini membuat cache chat lama dimulai ulang sekali.
 
 #### d. Suhu: pilihan "Konsisten"

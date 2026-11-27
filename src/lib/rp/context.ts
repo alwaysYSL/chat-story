@@ -5,7 +5,23 @@ import { estimateTokens } from '../providers';
 import { depthPrompt, fillMacros } from './cards';
 import { resolvePersona } from './data';
 import { isGroupChat, joinNames, memberIdsOf } from './group';
-import { CONTINUE_INSTR, impersonateInstr, lengthInstr, loreBlock, memoryBlock, reminderBlock, styleBlock, suggestInstr, summaryBlock, systemRp, systemRpGroup, turnInstr } from './prompts';
+import {
+  cardInstrBlock,
+  CONTINUE_INSTR,
+  impersonateInstr,
+  lengthInstr,
+  loreBlock,
+  memoryBlock,
+  NOTES_HEADER,
+  reminderBlock,
+  sceneBlock,
+  styleBlock,
+  suggestInstr,
+  summaryBlock,
+  systemRp,
+  systemRpGroup,
+  turnInstr,
+} from './prompts';
 
 /** Semua yang dibutuhkan untuk menyusun permintaan roleplay. */
 export interface RpWorld {
@@ -95,7 +111,10 @@ export interface PromptPart {
 export function systemParts(w: RpWorld): PromptPart[] {
   if (w.group) return groupSystemParts(w);
   const c = w.character;
-  const parts: PromptPart[] = [{ key: 'instr', label: c.systemPrompt.trim() ? 'Instruksi sistem kartu' : 'Instruksi roleplay', text: c.systemPrompt.trim() || systemRp(w.chat.rpStyle) }];
+  // Instruksi aplikasi selalu dipakai; system_prompt kartu ditambahkan di bawahnya (3.3).
+  const parts: PromptPart[] = [{ key: 'instr', label: 'Instruksi roleplay', text: systemRp(w.chat.rpStyle) }];
+  const own = cardInstr(c.systemPrompt);
+  if (own) parts.push({ key: 'card-instr', label: 'Instruksi tambahan dari kartu', text: cardInstrBlock(own) });
   const card = [
     `[Karakter: {{char}}]`,
     c.description.trim() && `Deskripsi:\n${c.description.trim()}`,
@@ -126,6 +145,10 @@ function groupSystemParts(w: RpWorld): PromptPart[] {
   const all = (t: string) => fillMacros(t, cast, user);
   const parts: PromptPart[] = [{ key: 'instr', label: 'Instruksi roleplay grup', text: all(systemRpGroup(w.chat.rpStyle, cast)) }];
   for (const c of w.members) {
+    const t = cardInstr(c.systemPrompt);
+    if (t) parts.push({ key: `card-instr:${c.id}`, label: `Instruksi kartu ${c.name}`, text: own(c, cardInstrBlock(t, c.name.trim() || 'Karakter')) });
+  }
+  for (const c of w.members) {
     const name = c.name.trim() || 'Karakter';
     const card = [`[Karakter: ${name}]`, c.description.trim() && `Deskripsi:\n${c.description.trim()}`, c.personality.trim() && `Kepribadian: ${c.personality.trim()}`]
       .filter(Boolean)
@@ -146,6 +169,11 @@ function groupSystemParts(w: RpWorld): PromptPart[] {
   const constant = w.books.flatMap((b) => b.entries.filter((e) => e.enabled && e.constant && e.content.trim()));
   if (constant.length) parts.push({ key: 'lore-const', label: 'Lore selalu dikirim', text: all(loreBlock(constant.sort((a, b) => b.priority - a.priority))) });
   return parts;
+}
+
+/** `system_prompt` kartu tanpa penanda {{original}} (SillyTavern: tempat instruksi bawaan; di sini instruksi bawaan selalu ada). */
+function cardInstr(t: string): string {
+  return t.replace(/\{\{\s*original\s*\}\}/gi, '').trim();
 }
 
 export function systemText(w: RpWorld): string {
@@ -308,6 +336,8 @@ export interface BuildOptions {
   summaries?: Map<number, { text: string; toSeq: number }>;
   /** grup: karakter yang menulis balasan ini */
   speakerId?: string | null;
+  /** keadaan adegan saat ini (3.3), dikirim di catatan akhir sesudah gaya */
+  scene?: string;
 }
 
 export interface BuiltRp {
@@ -381,23 +411,24 @@ export function buildRp(w0: RpWorld, o: BuildOptions): BuiltRp {
   }
   if (moments.length) extras.push({ key: 'pinned', label: `Momen tersemat (${moments.length})`, text: `[Momen penting yang disematkan pengguna]\n${moments.join('\n\n')}` });
   const style = styleBlock(w.chat.rpStyle);
+  const scene = o.scene?.trim() ? macro(w, sceneBlock(o.scene.trim())) : '';
   if (o.mode === 'impersonate' || o.mode === 'suggest') {
     if (style) extras.push({ key: 'style', label: 'Gaya', text: tail(style) });
+    if (scene) extras.push({ key: 'scene', label: 'Keadaan adegan', text: scene });
     extras.push({ key: 'instr-end', label: o.mode === 'suggest' ? 'Instruksi saran balasan' : 'Instruksi Bantu persona', text: tail(o.mode === 'suggest' ? suggestInstr() : impersonateInstr(o.hint ?? '')) });
-    out.push({ role: 'user', content: extras.map((e) => e.text).join('\n\n') });
   } else {
     // depth_prompt dari kartu SillyTavern ikut di akhir (bukan di kedalaman tertentu), supaya riwayat tetap kena cache.
     const reminders = [w.character.postHistory.trim(), depthPrompt(w.character).trim(), w.chat.reminder?.trim() ?? ''].filter(Boolean);
-    if (reminders.length) extras.push({ key: 'reminder', label: 'Pengingat aturan', text: macro(w, reminderBlock(reminders.join('\n'))) });
+    if (reminders.length) extras.push({ key: 'reminder', label: 'Pengingat aturan', text: macro(w, reminderBlock(reminders)) });
     if (style) extras.push({ key: 'style', label: 'Gaya', text: macro(w, style) });
+    if (scene) extras.push({ key: 'scene', label: 'Keadaan adegan', text: scene });
     if (w.group) extras.push({ key: 'turn', label: `Giliran: ${n.char}`, text: turnInstr(n.char) });
     extras.push({ key: 'length', label: 'Target panjang', text: macro(w, lengthInstr(o.length)) });
-    const joined = extras.map((e) => e.text).join('\n\n');
-    const last = out[out.length - 1];
-    // Ditempel ke giliran terakhir pengguna; tidak disimpan ke riwayat (cache tetap kena).
-    if (last.role === 'user' && typeof last.content === 'string') last.content = `${last.content}\n\n${joined}`;
-    else out.push({ role: 'user', content: joined });
   }
+  // Satu blok catatan berlabel sesudah giliran terakhir; tidak disimpan ke riwayat (cache tetap kena).
+  // Kalau giliran terakhir milik pengguna, mergeSameRole menggabungkannya ke giliran itu (beberapa API menolak dua pesan
+  // pengguna berturut-turut), tapi labelnya tetap memisahkan catatan dari cerita.
+  out.push({ role: 'user', content: [NOTES_HEADER, ...extras.map((e) => e.text)].join('\n\n') });
   const parts: PromptPart[] = [
     ...sys,
     ...(sumTexts.length ? [{ key: 'summaries', label: `Ringkasan (${sumTexts.length} blok)`, text: sumTexts.join('\n\n') }] : []),
