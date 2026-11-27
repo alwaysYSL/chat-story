@@ -32,14 +32,14 @@ import {
 } from '../../components/Icons';
 import { ModelPicker } from '../../components/Providers';
 import { Avatar } from '../../components/rp/Avatar';
-import { ConfirmSheet, PromptSheet, Sheet, SheetItem, toast, useLongPress } from '../../components/ui';
+import { ConfirmSheet, PromptSheet, Sheet, SheetItem, Toggle, toast, useLongPress } from '../../components/ui';
 import { stopGeneration, useActiveGen, UserError } from '../../lib/generate';
 import { goBack } from '../../lib/nav';
 import { trashChat } from '../../lib/pages';
 import { isPeak } from '../../lib/pricing';
 import { estimateTokens, findModel, usableModels, type ModelRef } from '../../lib/providers';
 import { polishTurn } from '../../lib/rp/assist';
-import { PinnedSheet, PreviewSheet, SearchSheet, StyleSheet, SuggestBar, ToStorySheet } from './RpChatTools';
+import { PinnedSheet, PreviewSheet, SceneSheet, SearchSheet, StyleSheet, SuggestBar, ToStorySheet } from './RpChatTools';
 import { fillMacros } from '../../lib/rp/cards';
 import { blockHash, historyOf, messageText, RP_CONTEXT_OPTIONS, RP_DEFAULT_CONTEXT, RP_KEEP_FULL, rpAutoThreshold, summaryBlocks } from '../../lib/rp/context';
 import { branchRpChat, ensureOwnLorebook, listPersonas, resolvePersona, togglePin } from '../../lib/rp/data';
@@ -49,6 +49,7 @@ import {
   dismissMemoryOffer,
   editRpMessage,
   impersonate,
+  MEMORY_AUTO_EVERY,
   MEMORY_EVERY,
   proposeMemory,
   retryRp,
@@ -114,6 +115,7 @@ export default function RpChat() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
+  const [sceneOpen, setSceneOpen] = useState(false);
   const [pinnedOpen, setPinnedOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState<null | { q: string; ids: string[]; i: number }>(null);
@@ -347,7 +349,7 @@ export default function RpChat() {
         </button>
       </div>
     );
-  } else if (list.length >= MEMORY_EVERY && sinceMemory >= MEMORY_EVERY && !busy) {
+  } else if (chat.memoryAuto === false && list.length >= MEMORY_EVERY && sinceMemory >= MEMORY_EVERY && !busy) {
     note = (
       <div className="composer-note">
         <span className="note-body">Sudah {sinceMemory} pesan sejak memori chat diperbarui.</span>
@@ -730,7 +732,8 @@ export default function RpChat() {
         )}
         <SheetItem icon={<IconSearch />} label="Cari di chat ini" onClick={() => { setChatMenu(false); setSearchOpen(true); }} />
         <SheetItem icon={<IconPin />} label="Pesan tersemat" hint={`${list.filter((m) => m.pinned).length} pesan`} onClick={() => { setChatMenu(false); setPinnedOpen(true); }} />
-        <SheetItem icon={<IconNotes />} label="Memori chat" hint={chat.memory?.trim() ? 'Terisi' : 'Belum diisi'} onClick={() => { setChatMenu(false); setMemoryOpen({ propose: false }); }} />
+        <SheetItem icon={<IconNotes />} label="Memori chat" hint={[chat.memory?.trim() ? 'Terisi' : 'Belum diisi', chat.memoryAuto === false ? 'manual' : 'otomatis'].join(' · ')} onClick={() => { setChatMenu(false); setMemoryOpen({ propose: false }); }} />
+        <SheetItem icon={<IconList />} label="Keadaan adegan" hint={chat.sceneOff ? 'Mati' : 'Waktu, pakaian, barang; dicatat otomatis untuk AI'} onClick={() => { setChatMenu(false); setSceneOpen(true); }} />
         <SheetItem icon={<IconList />} label="Ringkasan pesan lama" hint={summaryHint(chat.summaryMode)} onClick={() => { setChatMenu(false); setSummaryOpen(true); }} />
         <SheetItem
           icon={<IconBook />}
@@ -813,7 +816,7 @@ export default function RpChat() {
         }}
       />
 
-      {memoryOpen && <MemorySheet chatId={id} initial={chat.memory ?? ''} propose={memoryOpen.propose} onClose={() => setMemoryOpen(null)} />}
+      {memoryOpen && <MemorySheet chatId={id} initial={chat.memory ?? ''} auto={chat.memoryAuto !== false} propose={memoryOpen.propose} onClose={() => setMemoryOpen(null)} />}
       {summaryOpen && (
         <RpSummariesSheet
           chatId={id}
@@ -878,6 +881,7 @@ export default function RpChat() {
       />
       {previewOpen && <PreviewSheet chatId={id} text={text} model={effModel} forced={group ? forced : null} onClose={() => setPreviewOpen(false)} />}
       {styleOpen && <StyleSheet chat={chat} onClose={() => setStyleOpen(false)} />}
+      {sceneOpen && <SceneSheet chat={chat} onClose={() => setSceneOpen(false)} />}
       {pinnedOpen && (
         <PinnedSheet
           messages={list}
@@ -923,7 +927,9 @@ export default function RpChat() {
 function styleHint(st: RpStyle | undefined): string {
   const x = { ...DEFAULT_STYLE, ...st };
   const pov = { third: 'Orang ketiga', second: 'Orang kedua', first: 'Orang pertama' }[x.pov];
-  return [pov, x.role === 'narrator' ? 'narator' : '', x.pace !== 'medium' ? (x.pace === 'slow' ? 'lambat' : 'cepat') : '', x.register !== 'santai' ? x.register : ''].filter(Boolean).join(' · ');
+  return [pov, x.role === 'narrator' ? 'narator' : '', x.pace !== 'medium' ? (x.pace === 'slow' ? 'lambat' : 'cepat') : '', x.register !== 'santai' ? x.register : '', x.temp === 'consistent' ? 'konsisten' : '']
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function summaryHint(mode: string | undefined): string {
@@ -1154,7 +1160,7 @@ function MessageMenu({
 
 /* ---------- Memori chat ---------- */
 
-function MemorySheet({ chatId, initial, propose, onClose }: { chatId: string; initial: string; propose: boolean; onClose: () => void }) {
+function MemorySheet({ chatId, initial, auto, propose, onClose }: { chatId: string; initial: string; auto: boolean; propose: boolean; onClose: () => void }) {
   const [text, setText] = useState(initial);
   const [running, setRunning] = useState(false);
   const [live, setLive] = useState('');
@@ -1222,8 +1228,22 @@ function MemorySheet({ chatId, initial, propose, onClose }: { chatId: string; in
   }
   return (
     <Sheet open onClose={onClose} title="Memori chat">
-      <p className="note pad">Hubungan, situasi sekarang, fakta yang sudah pasti, dan tujuan yang belum selesai. Dibaca AI di setiap giliran (ditempel di akhir, jadi tidak mereset cache).</p>
-      <textarea className="input textarea-md" value={text} placeholder={'mis.\n- Rika dan Dimas baru berbaikan setelah bertengkar di studio.\n- Malam ini mereka di atap sekolah.'} onChange={(e) => setText(e.target.value)} />
+      <p className="note pad">Hubungan, linimasa per hari cerita, rencana & janji, fakta yang sudah pasti, dan benang terbuka. Dibaca AI di setiap giliran (dikirim di akhir, jadi tidak mereset cache).</p>
+      <div className="field-row sheet-row">
+        <span>
+          Perbarui otomatis
+          <small>Setiap {MEMORY_AUTO_EVERY} pesan, di belakang layar. Mati: aplikasi menawarkan pembaruan setiap {MEMORY_EVERY} pesan.</small>
+        </span>
+        <Toggle
+          checked={auto}
+          onChange={async (v) => {
+            await db.chats.update(chatId, { memoryAuto: v });
+            markChanged();
+          }}
+          label="Perbarui otomatis"
+        />
+      </div>
+      <textarea className="input textarea-md" value={text} placeholder={'mis.\nHubungan: Rika dan Dimas baru berbaikan.\nLinimasa:\n- Hari 1 (Sabtu): bertengkar di studio, berbaikan di atap.\nRencana & janji:\n- Minggu: libur, mau ke pantai.'} onChange={(e) => setText(e.target.value)} />
       <div className="row-buttons pad">
         <button className="btn" onClick={() => void run()}>
           <IconSparkle size={16} /> Perbarui dengan AI

@@ -267,7 +267,7 @@ export default function CharacterEdit() {
         </button>
         {advanced && (
           <>
-            {field('systemPrompt', 'Instruksi sistem khusus', 'Kosongkan untuk memakai instruksi roleplay bawaan (bahasa Indonesia, orang ketiga).', 4, false)}
+            {field('systemPrompt', 'Instruksi sistem khusus', 'Ditambahkan di bawah instruksi roleplay aplikasi (tidak menggantikannya). Boleh dikosongkan.', 4, false)}
             {field('postHistory', 'Pengingat aturan karakter', 'Dikirim di akhir setiap permintaan, mis. "{{char}} selalu menjawab singkat."', 3, false)}
             <div className="field rp-field">
               <span>Catatan karakter (depth prompt)</span>

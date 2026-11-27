@@ -3,7 +3,7 @@ import { ApiError, streamChat, type ApiMessage } from '../api';
 import { beginGen, currentGen, endGen, exclusive, holdBusy, patchGen, stopGeneration, UserError } from '../generate';
 import { costUsd, isPeak } from '../pricing';
 import { estimateTokens, findModel, PROVIDER_INFO, usableModels, type ModelRef } from '../providers';
-import { getSettings, markChanged, temperatureFor, type Settings } from '../settings';
+import { getSettings, markChanged, temperatureFor, type Creativity, type Settings } from '../settings';
 import { countWords, uid } from '../util';
 import {
   buildRp,
@@ -23,11 +23,18 @@ import {
 } from './context';
 import { isGroupChat, MAX_MEMBERS, pickSpeaker } from './group';
 import { resolvePersona } from './data';
-import { CONTINUE_INSTR, rpMaxTokens, SYSTEM_RP_MEMORY, SYSTEM_RP_SUMMARY } from './prompts';
+import { CONTINUE_INSTR, rpMaxTokens, SYSTEM_RP_MEMORY, SYSTEM_RP_SCENE, SYSTEM_RP_SUMMARY } from './prompts';
 
 export const RP_MAX_VERSIONS = 10;
-/** tawaran "Perbarui memori" muncul setiap sekian pesan */
+/** tawaran "Perbarui memori" muncul setiap sekian pesan (kalau pembaruan otomatis dimatikan) */
 export const MEMORY_EVERY = 30;
+/** memori diperbarui otomatis setiap sekian pesan (3.3) */
+export const MEMORY_AUTO_EVERY = 10;
+
+/** Tingkat suhu: gaya "Konsisten" memakai Stabil; selain itu kreativitas karakter atau pengaturan. */
+function rpLevel(w: RpWorld, s: Settings): Creativity {
+  return w.chat.rpStyle?.temp === 'consistent' ? 'stable' : (w.character.creativity ?? s.creativity);
+}
 
 /* ---------- Model ---------- */
 
@@ -364,6 +371,8 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
   const usePrefix = kind === 'append' && !!resolved && PROVIDER_INFO[resolved.provider.kind].prefix;
   try {
     if (!resolved) throw new ApiError('notfound', `Model "${asst.model}" tidak ada lagi di Pengaturan → Penyedia AI.`);
+    // Balasan berikutnya butuh keadaan adegan terbaru: tunggu pencatatan yang masih berjalan.
+    await waitScene(chatId, asst.seq, signal);
     const w0 = await loadWorld(chatId);
     if (!w0) throw new ApiError('invalid', 'Chat atau karakter tidak ditemukan.');
     const w = withSpeaker(w0, asst.speakerId);
@@ -372,8 +381,9 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
     // Grup: dipotong juga kalau AI mulai menulis giliran anggota lain.
     const others = [nm.user, ...(w.group ? w.members.filter((m) => m.id !== w.character.id).map((m) => m.name) : [])];
     guard = (t) => guardReply(t, nm.char, others);
+    const scene = await ensureScene(w0, asst.seq, signal);
     const summaries = await prepareSummaries(w0, resolved.model.context, signal);
-    const built = buildRp(w0, { beforeSeq: asst.seq, mode: 'reply', length, summaries, speakerId: asst.speakerId });
+    const built = buildRp(w0, { beforeSeq: asst.seq, mode: 'reply', length, summaries, speakerId: asst.speakerId, scene });
     lore = built.lore;
     const messages: ApiMessage[] = built.messages;
     if (kind === 'append') {
@@ -390,7 +400,7 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
         model: resolved.model,
         messages,
         thinking,
-        temperature: temperatureFor(resolved.provider, resolved.model, w.character.creativity ?? s.creativity),
+        temperature: temperatureFor(resolved.provider, resolved.model, rpLevel(w, s)),
         maxTokens: rpMaxTokens(length, thinking),
         prefix: usePrefix,
       },
@@ -451,7 +461,9 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
       const versions = [...cur.versions];
       const full = joinText(base, text, usePrefix);
       if (has) {
-        const v = versions[cur.active] ?? plainVersion(base);
+        const { scene: _old, ...v } = versions[cur.active] ?? plainVersion(base);
+        void _old;
+        // Teks berubah: keadaan adegan versi ini dicatat ulang.
         versions[cur.active] = { ...v, raw: full, words: countWords(full), costUsd: v.costUsd + cost };
       }
       Object.assign(patch, { text: has ? full : base, versions, status: has ? status : restored, error: has ? errOrNull(status, error) : (error ?? 'Dihentikan sebelum ada teks.') });
@@ -474,6 +486,8 @@ async function run({ chatId, asst, kind, prevStatus, settings: s }: RunArgs): Pr
     const who = cur.speakerId ?? chat?.characterId;
     if (who) await db.characters.update(who, { usedAt: Date.now() });
     markChanged();
+    // Keadaan adegan dicatat di belakang layar segera sesudah balasan (lalu memori otomatis kalau waktunya).
+    if (typeof patch.text === 'string' && patch.text.trim()) scheduleScene(chatId, asst.seq);
     return (patch.status as Message['status']) ?? status;
   } finally {
     endGen();
@@ -510,11 +524,19 @@ export async function editRpMessage(msgId: string, text: string): Promise<void> 
   if (!m) return;
   if (m.role === 'assistant') {
     const versions = [...m.versions];
-    if (versions[m.active]) versions[m.active] = { ...versions[m.active], raw: text, words: countWords(text) };
+    // Mengedit menghapus snapshot keadaan adegan versi itu; permintaan berikutnya menghitung ulang.
+    if (versions[m.active]) versions[m.active] = { ...versions[m.active], raw: text, words: countWords(text), scene: undefined };
     else versions.push(plainVersion(text));
     await db.messages.update(msgId, { text, versions, active: Math.min(m.active, versions.length - 1) });
   } else {
     await db.messages.update(msgId, { text: text.trim(), instr: text.trim() ? '' : CONTINUE_INSTR });
+    // Giliran pengguna berubah: keadaan sesudah balasan berikutnya tidak berlaku lagi.
+    const next = (await db.messages.where('chatId').equals(m.chatId).sortBy('seq')).find((x) => x.seq > m.seq && x.role === 'assistant');
+    if (next?.versions[next.active]?.scene !== undefined) {
+      const versions = [...next.versions];
+      versions[next.active] = { ...versions[next.active], scene: undefined };
+      await db.messages.update(next.id, { versions });
+    }
   }
   markChanged();
 }
@@ -545,10 +567,11 @@ export function impersonate(chatId: string, hint: string, model: ModelRef, onLiv
     const nm = names(w);
     let cut = false;
     try {
+      const scene = await freshScene(chatId, signal);
       const summaries = await prepareSummaries(w, r.model.context, signal);
-      const built = buildRp(w, { mode: 'impersonate', hint, length: w.chat.rpLength ?? 'normal', summaries });
+      const built = buildRp(w, { mode: 'impersonate', hint, length: w.chat.rpLength ?? 'normal', summaries, scene });
       const res = await streamChat(
-        { provider: r.provider, model: r.model, messages: built.messages, thinking: false, temperature: temperatureFor(r.provider, r.model, w.character.creativity ?? s.creativity), maxTokens: 900 },
+        { provider: r.provider, model: r.model, messages: built.messages, thinking: false, temperature: temperatureFor(r.provider, r.model, rpLevel(w, s)), maxTokens: 900 },
         (d, k) => {
           if (k !== 'content') return;
           text += d;
@@ -644,17 +667,33 @@ export function rpAssist(a: RpAssist): Promise<string> {
 
 /* ---------- Memori chat ---------- */
 
-export async function proposeMemory(chatId: string, onDelta?: (t: string) => void, signal?: AbortSignal): Promise<string> {
+/** Penanda permintaan memori otomatis (juga dipakai tes). */
+export const MEMORY_AUTO_MARK = `[Pembaruan otomatis setiap ${MEMORY_AUTO_EVERY} pesan]`;
+
+/**
+ * Usulan memori baru dari memori lama, keadaan adegan, dan pesan terbaru.
+ * `auto`: pembaruan otomatis di belakang layar, membaca pesan sejak pembaruan terakhir (`since`).
+ */
+export async function proposeMemory(chatId: string, onDelta?: (t: string) => void, signal?: AbortSignal, auto?: { since: number }): Promise<string> {
   const w = await loadWorld(chatId);
   if (!w) throw new Error('Chat tidak ditemukan.');
-  const recent = historyOf(w.messages).slice(-40);
+  const all = historyOf(w.messages);
+  const recent = all.slice(-(auto ? Math.min(40, Math.max(MEMORY_AUTO_EVERY, auto.since)) : 40));
+  const scene = w.chat.sceneOff ? '' : (latestScene(all) ?? '');
   const user = [
+    ...(auto ? [MEMORY_AUTO_MARK] : []),
     w.group ? `[Roleplay grup dengan ${castName(w)}. Catat juga hubungan antar tokoh.]` : `[Karakter] ${w.character.name}`,
     `[Memori saat ini]\n${w.chat.memory?.trim() || '(masih kosong)'}`,
+    ...(scene.trim() ? [`[Keadaan adegan saat ini]\n${scene.trim()}`] : []),
     `[Pesan-pesan terbaru]\n${transcript(w, recent)}`,
     'Perbarui memori chat berdasarkan pesan-pesan di atas.',
   ].join('\n\n');
-  return rpAssist({ rootId: chatId, chatId, kind: 'rp-memory', label: 'Perbarui memori', system: w.group ? SYSTEM_RP_MEMORY.replace(/\{\{char\}\}/g, castName(w)).replace(/\{\{user\}\}/g, names(w).user) : macro(w, SYSTEM_RP_MEMORY), user, maxTokens: 1200, onDelta, signal });
+  return rpAssist({ rootId: chatId, chatId, kind: 'rp-memory', label: 'Perbarui memori', system: sysFor(w, SYSTEM_RP_MEMORY), user, maxTokens: 1400, onDelta, signal, locked: !!auto });
+}
+
+/** Penanda {{char}}/{{user}} di instruksi bantu (grup: {{char}} = semua anggota). */
+function sysFor(w: RpWorld, text: string): string {
+  return w.group ? text.replace(/\{\{char\}\}/g, castName(w)).replace(/\{\{user\}\}/g, names(w).user) : macro(w, text);
 }
 
 export async function saveMemory(chatId: string, text: string): Promise<void> {
@@ -758,6 +797,233 @@ export async function summarizeNow(chatId: string, fromSeq: number): Promise<voi
 
 export { messageText };
 
+/* ---------- Keadaan adegan (3.3) ---------- */
+
+/** pesan sejak snapshot sebelumnya yang dibaca pencatat (dibatasi supaya permintaannya tetap kecil) */
+const SCENE_MAX_MSGS = 12;
+const SCENE_STATUS = 'Mencatat keadaan adegan…';
+
+interface SceneJob {
+  /** seq balasan yang sedang dicatat */
+  seq: number;
+  ctrl: AbortController;
+  done: Promise<void>;
+}
+const sceneJobs = new Map<string, SceneJob>();
+const memoryRunning = new Set<string>();
+
+/** Balasan terakhir berisi teks dalam riwayat (titik snapshot). */
+function sceneAnchor(history: Message[]): Message | undefined {
+  for (let i = history.length - 1; i >= 0; i--) if (history[i].role === 'assistant' && history[i].text.trim()) return history[i];
+  return undefined;
+}
+
+/** Snapshot versi aktif (undefined = belum dicatat). */
+function storedScene(m: Message): string | undefined {
+  return m.versions[m.active]?.scene;
+}
+
+/** Snapshot tersimpan terakhir dalam riwayat (untuk memori dan sheet Keadaan adegan). */
+export function latestScene(history: Message[]): string | undefined {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== 'assistant' || !m.text.trim()) continue;
+    const sc = storedScene(m);
+    if (sc !== undefined) return sc;
+  }
+  return undefined;
+}
+
+/** Simpan snapshot ke versi yang teksnya masih sama (kalau sudah diedit/diganti, tidak disimpan). */
+async function storeScene(msgId: string, raw: string, scene: string): Promise<boolean> {
+  const m = await db.messages.get(msgId);
+  if (!m) return false;
+  const versions = [...m.versions];
+  let i = versions[m.active]?.raw === raw ? m.active : versions.findIndex((v) => v.raw === raw);
+  if (i < 0 && !versions.length && m.text === raw) {
+    versions.push(plainVersion(raw));
+    i = 0;
+  }
+  if (i < 0) return false;
+  versions[i] = { ...versions[i], scene };
+  await db.messages.update(msgId, { versions });
+  return true;
+}
+
+/**
+ * Keadaan adegan untuk permintaan sebelum `beforeSeq`: snapshot balasan terakhir sebelum titik itu.
+ * Belum ada → dihitung dari snapshot sebelumnya + pesan sesudahnya, lalu disimpan. Gagal → snapshot terakhir yang berhasil.
+ */
+/** `show` = tampilkan status di kolom ketik (pencatatan di belakang layar tidak menyentuh status permintaan lain). */
+async function ensureScene(w: RpWorld, beforeSeq: number, signal: AbortSignal, show = true, strict = false): Promise<string> {
+  if (w.chat.sceneOff) return '';
+  const history = historyOf(w.messages, beforeSeq);
+  const anchor = sceneAnchor(history);
+  if (!anchor) return '';
+  const have = storedScene(anchor);
+  if (have !== undefined) return have;
+  const idx = history.indexOf(anchor);
+  let prev = '';
+  let from = 0;
+  for (let i = idx - 1; i >= 0; i--) {
+    const m = history[i];
+    const sc = m.role === 'assistant' && m.text.trim() ? storedScene(m) : undefined;
+    if (sc !== undefined) {
+      prev = sc;
+      from = i + 1;
+      break;
+    }
+  }
+  const msgs = history.slice(Math.max(from, idx + 1 - SCENE_MAX_MSGS), idx + 1);
+  if (show) patchGen({ status: SCENE_STATUS });
+  try {
+    const text = await rpAssist({
+      rootId: w.chat.id,
+      chatId: w.chat.id,
+      kind: 'rp-scene',
+      label: 'Keadaan adegan',
+      system: sysFor(w, SYSTEM_RP_SCENE),
+      user: sceneInput(w, prev, msgs),
+      maxTokens: 700,
+      signal,
+      locked: true,
+    });
+    if (!text) return prev;
+    await storeScene(anchor.id, anchor.text, text);
+    return text;
+  } catch (e) {
+    if (signal.aborted || strict) throw e;
+    // Gagal: balasan tetap ditulis dengan snapshot terakhir; pencatatan diulang di giliran berikutnya.
+    return prev;
+  } finally {
+    if (show) patchGen({ status: undefined });
+  }
+}
+
+function sceneInput(w: RpWorld, prev: string, msgs: Message[]): string {
+  const brief = (t: string) => (t.length > 700 ? t.slice(0, 700) + '…' : t);
+  const cards = w.members.map((c) => `${c.name.trim() || 'Karakter'}: ${brief(macro({ ...w, character: c }, c.description.trim()) || '(tanpa deskripsi)')}`);
+  const user = names(w).user;
+  return [
+    `[Kartu tokoh, hanya acuan awal tentang kebiasaan umum]\n${cards.join('\n')}`,
+    `[Tokoh pengguna] ${user}${w.persona?.description.trim() ? `: ${brief(w.persona.description.trim())}` : ''}`,
+    `[Keadaan sebelumnya]\n${prev.trim() || '(belum ada; susun dari pesan di bawah)'}`,
+    `[Pesan terbaru]\n${transcript(w, msgs)}`,
+    'Tulis keadaan adegan sesudah pesan terakhir di atas.',
+  ].join('\n\n');
+}
+
+/** Catat keadaan adegan di belakang layar sesudah balasan `seq` selesai, lalu perbarui memori kalau waktunya. */
+function scheduleScene(chatId: string, seq: number): void {
+  sceneJobs.get(chatId)?.ctrl.abort();
+  const ctrl = new AbortController();
+  const job: SceneJob = { seq, ctrl, done: Promise.resolve() };
+  job.done = (async () => {
+    try {
+      const w = await loadWorld(chatId);
+      if (w && !ctrl.signal.aborted) await ensureScene(w, Infinity, ctrl.signal, false);
+    } catch {
+      /* diulang sebelum balasan berikutnya */
+    } finally {
+      if (sceneJobs.get(chatId) === job) sceneJobs.delete(chatId);
+    }
+    if (!ctrl.signal.aborted) void maybeAutoMemory(chatId);
+  })();
+  sceneJobs.set(chatId, job);
+}
+
+/**
+ * Tunggu pencatatan yang masih berjalan (Stop membatalkannya). Pencatatan untuk balasan yang sedang ditulis ulang
+ * (seq ≥ beforeSeq) tidak dibutuhkan lagi, jadi dibatalkan.
+ */
+async function waitScene(chatId: string, beforeSeq: number, signal: AbortSignal): Promise<void> {
+  const job = sceneJobs.get(chatId);
+  if (!job) return;
+  if (job.seq >= beforeSeq) {
+    job.ctrl.abort();
+    return;
+  }
+  patchGen({ status: SCENE_STATUS });
+  const onAbort = () => job.ctrl.abort();
+  signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    await job.done;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+    patchGen({ status: undefined });
+  }
+  if (signal.aborted) throw new ApiError('aborted', 'Dihentikan.');
+}
+
+/** Keadaan terbaru untuk Bantu persona dan saran balasan. */
+async function freshScene(chatId: string, signal: AbortSignal): Promise<string> {
+  await waitScene(chatId, Infinity, signal);
+  const w = await loadWorld(chatId);
+  return w ? ensureScene(w, Infinity, signal) : '';
+}
+
+/** Untuk sheet Keadaan adegan: catatan saat ini (null = belum ada balasan). */
+export async function currentScene(chatId: string): Promise<{ text: string; stored: boolean; running: boolean } | null> {
+  const msgs = historyOf(await db.messages.where('chatId').equals(chatId).sortBy('seq'));
+  const anchor = sceneAnchor(msgs);
+  if (!anchor) return null;
+  const sc = storedScene(anchor);
+  return { text: sc ?? latestScene(msgs) ?? '', stored: sc !== undefined, running: sceneJobs.has(chatId) };
+}
+
+/** Koreksi pengguna: disimpan ke snapshot balasan terakhir. */
+export async function saveScene(chatId: string, text: string): Promise<void> {
+  const msgs = historyOf(await db.messages.where('chatId').equals(chatId).sortBy('seq'));
+  const anchor = sceneAnchor(msgs);
+  if (!anchor) return;
+  sceneJobs.get(chatId)?.ctrl.abort();
+  await storeScene(anchor.id, anchor.text, text.trim());
+  markChanged();
+}
+
+/** Catat ulang sekarang (menu Keadaan adegan). */
+export function rescanScene(chatId: string): Promise<string> {
+  return exclusive(async () => {
+    sceneJobs.get(chatId)?.ctrl.abort();
+    const w = await loadWorld(chatId);
+    if (!w) return '';
+    const anchor = sceneAnchor(historyOf(w.messages));
+    if (!anchor) return '';
+    // Snapshot balasan terakhir dibuang dulu supaya dihitung dari snapshot sebelumnya.
+    const versions = [...anchor.versions];
+    if (versions[anchor.active]) versions[anchor.active] = { ...versions[anchor.active], scene: undefined };
+    const fresh = { ...anchor, versions };
+    const world = { ...w, chat: { ...w.chat, sceneOff: false }, messages: w.messages.map((m) => (m.id === anchor.id ? fresh : m)) };
+    const text = await ensureScene(world, Infinity, new AbortController().signal, false, true);
+    markChanged();
+    return text;
+  });
+}
+
+/** Memori otomatis setiap 10 pesan (di belakang layar, sesudah pencatatan keadaan). */
+async function maybeAutoMemory(chatId: string): Promise<void> {
+  if (memoryRunning.has(chatId)) return;
+  const chat = await db.chats.get(chatId);
+  if (!chat || chat.deletedAt || chat.memoryAuto === false) return;
+  const count = await db.messages.where('chatId').equals(chatId).count();
+  const since = count - (chat.memoryAtCount ?? 0);
+  if (since < 0) await db.chats.update(chatId, { memoryAtCount: count });
+  if (since < MEMORY_AUTO_EVERY) return;
+  memoryRunning.add(chatId);
+  try {
+    const before = chat.memory ?? '';
+    const text = await proposeMemory(chatId, undefined, undefined, { since });
+    const now = await db.chats.get(chatId);
+    // Memori diubah pengguna sementara itu: hasil otomatis tidak menimpanya.
+    if (!text || !now || (now.memory ?? '') !== before) return;
+    await saveMemory(chatId, text);
+  } catch {
+    /* dicoba lagi sesudah balasan berikutnya */
+  } finally {
+    memoryRunning.delete(chatId);
+  }
+}
+
 /* ---------- Saran balasan ---------- */
 
 /** Ambil array string dari jawaban model (JSON, atau daftar bernomor kalau model tidak patuh). */
@@ -792,10 +1058,12 @@ export function suggestReplies(chatId: string, model: ModelRef): Promise<string[
     let text = '';
     let usage = { hit: 0, miss: 0, out: 0 };
     try {
+      const scene = await freshScene(chatId, signal);
+      patchGen({ status: 'Menyiapkan saran…' });
       const summaries = await prepareSummaries(w, r.model.context, signal);
-      const built = buildRp(w, { mode: 'suggest', length: w.chat.rpLength ?? 'normal', summaries });
+      const built = buildRp(w, { mode: 'suggest', length: w.chat.rpLength ?? 'normal', summaries, scene });
       const res = await streamChat(
-        { provider: r.provider, model: r.model, messages: built.messages, thinking: false, temperature: temperatureFor(r.provider, r.model, w.character.creativity ?? s.creativity), maxTokens: 700 },
+        { provider: r.provider, model: r.model, messages: built.messages, thinking: false, temperature: temperatureFor(r.provider, r.model, rpLevel(w, s)), maxTokens: 700 },
         () => {},
         signal,
       );
@@ -827,6 +1095,8 @@ export interface RequestPreview {
   model: string;
   /** blok pesan lama yang akan diringkas dulu saat dikirim */
   pendingSummaries: number;
+  /** keadaan adegan akan dicatat dulu saat dikirim (yang tampil: snapshot terakhir yang ada) */
+  pendingScene: boolean;
   lore: string[];
 }
 
@@ -845,15 +1115,20 @@ export async function previewRequest(chatId: string, text: string, model: ModelR
   const speakerId = w.group ? nextSpeaker(world, forced) : null;
   const summaries = await prepareSummaries(world, r?.model.context, new AbortController().signal, true);
   const length = w.chat.rpLength ?? 'normal';
-  const built = buildRp(world, { mode: 'reply', length, summaries, speakerId });
+  const history = historyOf(world.messages);
+  const anchor = w.chat.sceneOff ? undefined : sceneAnchor(history);
+  const stored = anchor ? storedScene(anchor) : undefined;
+  const pendingScene = !!anchor && (stored === undefined || sceneJobs.has(chatId));
+  const scene = w.chat.sceneOff ? '' : (stored ?? latestScene(history) ?? '');
+  const built = buildRp(world, { mode: 'reply', length, summaries, speakerId, scene });
   const parts = built.parts.map((p) => ({ ...p, tokens: estimateTokens(p.text.length) }));
   const total = parts.reduce((n, p) => n + p.tokens, 0);
   // Bagian sesudah riwayat (tambahan akhir + pesan baru) dihitung tanpa cache; sisanya kena cache.
-  const tailKeys = new Set(['lore', 'memory', 'pinned', 'reminder', 'style', 'turn', 'length']);
+  const tailKeys = new Set(['lore', 'memory', 'pinned', 'reminder', 'style', 'scene', 'turn', 'length']);
   const miss = parts.filter((p) => tailKeys.has(p.key)).reduce((n, p) => n + p.tokens, 0) + estimateTokens(messageText(fake).length);
   const out = Math.round(RP_LENGTH_TOKENS[length]);
   const cost = r ? costUsd(r.provider, r.model, { hit: Math.max(0, total - miss), miss, out }, isPeak(), s.usdToIdr) : null;
-  return { parts, total, costUsd: cost, model: r?.model.label ?? '-', pendingSummaries: summaries.missing ?? 0, lore: built.lore };
+  return { parts, total, costUsd: cost, model: r?.model.label ?? '-', pendingSummaries: summaries.missing ?? 0, pendingScene, lore: built.lore };
 }
 
 /** perkiraan token keluaran per panjang balasan (kata maksimal × ±1,6) */

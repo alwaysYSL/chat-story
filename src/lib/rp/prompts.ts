@@ -1,16 +1,32 @@
 import type { RpLength, RpStyle } from '../../db';
 
-/** Instruksi roleplay bawaan (dipakai kalau kartu tidak punya instruksi sistem sendiri). */
+/**
+ * Aturan kesinambungan (3.3). Dipakai di semua instruksi bawaan, sebelum aturan "jangan mengulang".
+ * Mengubah teks ini membuat cache chat lama dimulai ulang sekali.
+ */
+const CONTINUITY = [
+  'Jaga kesinambungan. Sebelum menulis, cocokkan dengan [Keadaan adegan] dan [Memori chat] di catatan aplikasi; keduanya lebih berlaku daripada kartu karakter.',
+  'Kartu menggambarkan kebiasaan umum tokoh. Apa yang sedang dipakai, dipegang, dan dilakukan ditentukan oleh keadaan adegan saat ini.',
+  'Jangan memakai lagi barang yang sudah dibuang, habis, atau ditinggal, atau pakaian yang sudah dilepas. Jangan mengubah waktu, tempat, atau rencana tanpa sebab di cerita.',
+  'Waktu cerita hanya maju kalau cerita memajukannya.',
+];
+
+const bullets = (lines: string[]) => lines.map((l) => `- ${l}`).join('\n');
+
+/** Instruksi roleplay bawaan. `system_prompt` kartu ditambahkan di bawahnya, tidak menggantikan. */
 export const SYSTEM_RP = `Kamu adalah narator dan pemeran dalam roleplay fiksi interaktif bersama {{user}}. Kamu memerankan {{char}} dan semua tokoh lain di sekitarnya, kecuali {{user}}.
 
-- Tulis dalam bahasa Indonesia, dengan narasi orang ketiga. Dialog dalam tanda kutip "…", pikiran atau penekanan dengan *miring*.
-- JANGAN PERNAH menulis aksi, ucapan, pikiran, atau perasaan {{user}}. {{user}} dimainkan oleh pengguna.
-- Tetap dalam peran. Jangan berkomentar di luar cerita dan jangan menyebut dirimu AI.
-- Tanggapi giliran terakhir {{user}}, majukan adegan, dan beri detail indera serta emosi yang sesuai dengan kepribadian {{char}}.
-- Jangan mengulang kalimat atau frasa dari balasan sebelumnya.
-- Akhiri balasan di titik yang memberi kesempatan {{user}} untuk menanggapi.`;
+${bullets([
+  'Tulis dalam bahasa Indonesia, dengan narasi orang ketiga. Dialog dalam tanda kutip "…", pikiran atau penekanan dengan *miring*.',
+  'JANGAN PERNAH menulis aksi, ucapan, pikiran, atau perasaan {{user}}. {{user}} dimainkan oleh pengguna.',
+  'Tetap dalam peran. Jangan berkomentar di luar cerita dan jangan menyebut dirimu AI.',
+  'Tanggapi giliran terakhir {{user}}, majukan adegan, dan beri detail indera serta emosi yang sesuai dengan kepribadian {{char}}.',
+  ...CONTINUITY,
+  'Jangan mengulang kalimat atau frasa dari balasan sebelumnya.',
+  'Akhiri balasan di titik yang memberi kesempatan {{user}} untuk menanggapi.',
+])}`;
 
-export const DEFAULT_STYLE: RpStyle = { pov: 'third', role: 'actor', pace: 'medium', register: 'santai' };
+export const DEFAULT_STYLE: RpStyle = { pov: 'third', role: 'actor', pace: 'medium', register: 'santai', temp: 'follow' };
 
 /**
  * Instruksi bawaan sesuai sudut pandang dan peran AI. Gaya bawaan menghasilkan teks yang sama persis
@@ -36,10 +52,11 @@ export function systemRp(style?: RpStyle): string {
     st.role === 'narrator'
       ? 'Tanggapi giliran terakhir {{user}}, gambarkan akibatnya, dan majukan cerita. Sesekali boleh menawarkan 2–3 pilihan tindakan singkat di akhir balasan.'
       : 'Tanggapi giliran terakhir {{user}}, majukan adegan, dan beri detail indera serta emosi yang sesuai dengan kepribadian {{char}}.',
+    ...CONTINUITY,
     'Jangan mengulang kalimat atau frasa dari balasan sebelumnya.',
     'Akhiri balasan di titik yang memberi kesempatan {{user}} untuk menanggapi.',
   ];
-  return `${intro}\n\n${lines.map((l) => `- ${l}`).join('\n')}`;
+  return `${intro}\n\n${bullets(lines)}`;
 }
 
 /** Instruksi bawaan group chat. `cast` = nama-nama anggota (urut, tetap) supaya bagian system kena cache. */
@@ -62,10 +79,11 @@ export function systemRpGroup(style: RpStyle | undefined, cast: string): string 
     'Di riwayat, setiap balasan diawali nama tokohnya. Jangan menulis nama tokoh di awal balasanmu.',
     'Tetap dalam peran. Jangan berkomentar di luar cerita dan jangan menyebut dirimu AI.',
     'Tanggapi giliran terakhir, majukan adegan, dan jaga suara serta kepribadian tiap tokoh tetap berbeda.',
+    ...CONTINUITY,
     'Jangan mengulang kalimat atau frasa dari balasan sebelumnya.',
     'Akhiri balasan di titik yang memberi kesempatan tokoh lain atau {{user}} untuk menanggapi.',
   ];
-  return `${intro}\n\n${lines.map((l) => `- ${l}`).join('\n')}`;
+  return `${intro}\n\n${bullets(lines)}`;
 }
 
 export function turnInstr(name: string): string {
@@ -118,8 +136,21 @@ export function loreBlock(entries: { title: string; content: string }[]): string
   return `[Lore yang relevan]\n${entries.map((e) => e.content.trim()).join('\n\n')}`;
 }
 
-export function reminderBlock(text: string): string {
-  return `[Pengingat aturan]\n${text}`;
+/** Pengingat aturan sebagai daftar bernomor (satu aturan per baris). */
+export function reminderBlock(lines: string[]): string {
+  const list = lines.flatMap((l) => l.split('\n')).map((l) => l.trim().replace(/^(?:\d{1,2}[.)]|[-*•])\s+/, '')).filter(Boolean);
+  return `[Pengingat aturan. Wajib dipatuhi.]\n${list.map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
+}
+
+/** Label pesan tambahan per giliran (lore, memori, pengingat, gaya, keadaan adegan, target panjang). */
+export const NOTES_HEADER = '[Catatan aplikasi untuk balasan berikutnya. Bukan bagian cerita; jangan dikutip.]';
+
+export function cardInstrBlock(text: string, name?: string): string {
+  return `[Instruksi tambahan dari kartu${name ? ` ${name}` : ''}]\n${text}`;
+}
+
+export function sceneBlock(text: string): string {
+  return `[Keadaan adegan saat ini — WAJIB konsisten. Lebih berlaku daripada kartu.]\n${text}`;
 }
 
 export function summaryBlock(text: string): string {
@@ -131,17 +162,46 @@ export function summaryBlock(text: string): string {
 export const SYSTEM_RP_SUMMARY = `Kamu meringkas sebagian roleplay fiksi supaya AI pemeran tetap ingat kejadiannya tanpa membaca pesan aslinya.
 
 - Bahasa Indonesia, 150–300 kata, kalimat lampau yang padat.
-- Urutkan kejadian penting, sebut nama tokoh, tempat, keputusan, janji, rahasia, perubahan hubungan, dan keadaan di akhir bagian.
+- Urutkan kejadian penting, sebut nama tokoh, tempat, keputusan, janji, rahasia, dan perubahan hubungan. Sebut hari atau waktu cerita kalau ada.
 - Jangan menilai, jangan menambah hal yang tidak ada.
+- Tutup dengan baris "Keadaan di akhir bagian:" lalu poin singkat: waktu cerita (hari, jam), lokasi, pakaian tiap tokoh (termasuk yang dilepas dan letaknya), barang yang dipegang atau sudah dibuang/habis/ditinggal, dan rencana atau janji yang masih berlaku.
 - Keluarkan HANYA ringkasan.`;
 
-export const SYSTEM_RP_MEMORY = `Kamu menjaga "memori chat" sebuah roleplay fiksi: catatan singkat yang dibaca AI pemeran di setiap giliran.
+export const SYSTEM_RP_MEMORY = `Kamu menjaga "memori chat" sebuah roleplay fiksi: catatan jangka panjang yang dibaca AI pemeran di setiap giliran.
 
-- Bahasa Indonesia, berupa poin, maksimal sekitar 300 kata.
-- Isi: hubungan {{char}} dan {{user}} saat ini, situasi dan lokasi sekarang, fakta yang sudah pasti, janji atau tujuan yang belum selesai, perubahan penting terakhir.
-- Pertahankan isi memori lama yang masih berlaku, perbarui yang berubah, hapus yang tidak relevan lagi.
+Format (judul bagian tetap, isinya poin singkat; tulis "-" kalau kosong):
+Hubungan: hubungan {{char}} dan {{user}} saat ini (grup: juga antar tokoh)
+Linimasa: per hari cerita, mis. "Hari 1 (Jumat): …", kejadian penting secara singkat
+Rencana & janji: dengan waktunya, mis. "Minggu: libur, mau ke pantai"
+Fakta yang sudah pasti: hal yang sudah ditetapkan cerita dan perubahan jangka panjang (mis. Rika memotong rambut)
+Benang terbuka: konflik, rahasia, atau pertanyaan yang belum selesai
+
+Aturan:
+- Bahasa Indonesia, maksimal sekitar 400 kata.
+- Pertahankan isi memori lama yang masih berlaku, perbarui yang berubah, hapus yang tidak relevan lagi. Rencana yang sudah terlaksana atau batal dipindah ke Linimasa. Hari-hari lama di Linimasa boleh dipadatkan.
+- Detail sesaat (pakaian sekarang, barang di tangan, posisi) tidak masuk memori; itu dicatat di keadaan adegan.
 - Jangan menyalin dialog. Jangan menulis ulang identitas tetap karakter (sudah ada di kartu).
 - Keluarkan HANYA isi memori baru.`;
+
+export const SYSTEM_RP_SCENE = `Kamu mencatat keadaan adegan sebuah roleplay fiksi supaya AI pemeran tidak melupakan atau menghidupkan lagi detail kecil. Catatan ini hanya dibaca AI.
+
+Format (selalu semua baris; tulis "-" kalau belum diketahui):
+Waktu   : hari & waktu cerita (mis. Sabtu malam ±21.00, hari ke-2), dan hal tentang besok/nanti yang sudah disebut (mis. Besok: Minggu, libur kuliah)
+Lokasi  : tempat sekarang
+Hadir   : siapa saja di adegan, posisinya kalau penting
+Pakaian : per tokoh: yang dipakai, dan yang dilepas beserta letaknya (mis. jaket kulit digantung di kursi)
+Barang  : yang dipegang / dibawa / ada di dekat tokoh; yang sudah dibuang, habis, atau ditinggal beserta letaknya
+Kondisi : fisik & emosi yang sedang berlaku (basah, mengantuk, luka di tangan kiri, marah ke seseorang)
+Sekitar : keadaan tempat yang berpengaruh (lampu mati, hujan deras, pintu dikunci)
+
+Aturan:
+- Mulai dari keadaan sebelumnya. Pertahankan setiap detail selama masih berhubungan dengan cerita; ubah hanya kalau cerita mengubahnya.
+- Catat juga perubahan yang ditulis {{user}} (mis. "aku buang permenku" → Barang: permen karet {{user}} sudah dibuang).
+- Barang yang sudah dibuang atau habis tetap dicatat begitu selama masih berhubungan, supaya tidak dipakai lagi.
+- Waktu hanya maju kalau cerita memajukannya. Jangan menebak jam kalau cerita tidak menyebut; pakai perkiraan kasar (pagi, sore, malam).
+- Kartu karakter hanya acuan awal tentang kebiasaan umum; yang tertulis di cerita lebih berlaku.
+- Detail yang sudah sama sekali tidak berhubungan (adegan lain, lama tidak disebut) boleh dihapus.
+- Bahasa Indonesia, singkat, maksimal ±350 kata. Keluarkan HANYA catatan dengan format di atas, tanpa komentar.`;
 
 export const SYSTEM_RP_CARD = `Kamu membantu membuat kartu karakter roleplay dalam bahasa Indonesia.
 

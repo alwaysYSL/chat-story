@@ -35,6 +35,8 @@ export interface RpStyle {
   role: 'actor' | 'narrator';
   pace: 'slow' | 'medium' | 'fast';
   register: 'baku' | 'santai' | 'gaul';
+  /** Versi 3.3: 'consistent' = suhu tingkat Stabil (lebih patuh pada detail) */
+  temp?: 'follow' | 'consistent';
 }
 
 /** Potongan avatar dari foto asli, dalam pecahan lebar/tinggi foto (0–1). */
@@ -76,6 +78,10 @@ export interface Chat {
   /** batas konteks roleplay (token) untuk ringkasan otomatis; 0 = ikuti batas model; kosong = bawaan 32 ribu */
   rpContext?: number;
   rpStyle?: RpStyle;
+  /** Versi 3.3: pencatat keadaan adegan dimatikan */
+  sceneOff?: boolean;
+  /** Versi 3.3: false = memori tidak diperbarui otomatis */
+  memoryAuto?: boolean;
   /** chat ini cabang dari chat lain */
   branchOf?: { chatId: string; title: string; seq: number };
   /* ----- Group chat (Versi 3.2) ----- */
@@ -115,6 +121,8 @@ export interface Version {
   /** group chat: pembicara versi ini (Tulis ulang sebagai…) */
   speakerId?: string;
   speakerName?: string;
+  /** roleplay (3.3): keadaan adegan sesudah versi balasan ini (hanya untuk AI) */
+  scene?: string;
 }
 
 export interface Message {
@@ -181,7 +189,7 @@ export interface UsageLog {
   id: string;
   /** id cerita; untuk roleplay: id chat roleplay atau id karakter */
   rootId: string;
-  kind: 'notes' | 'summary' | 'rewrite' | 'rp-persona' | 'rp-memory' | 'rp-summary' | 'rp-card' | 'rp-polish' | 'rp-suggest' | 'rp-story';
+  kind: 'notes' | 'summary' | 'rewrite' | 'rp-persona' | 'rp-memory' | 'rp-summary' | 'rp-card' | 'rp-polish' | 'rp-suggest' | 'rp-story' | 'rp-scene';
   label: string;
   costUsd: number;
   costUnknown: boolean;
